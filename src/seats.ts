@@ -300,9 +300,10 @@ export async function waitOutQueue(
       continue;
     }
 
-    // 실제 예매/좌석 관련 화면
+    // 실제 예매/좌석 관련 화면 (실측: /onestop/seat)
     if (
-      /좌석선택|등급선택|잔여석|원하시는 좌석|좌석을 선택|가격|매수/.test(t) ||
+      /onestop\/seat/i.test(url) ||
+      /좌석선택|등급선택|잔여석|원하시는 좌석|좌석을 선택|예매 안내/.test(t) ||
       (/gates\/ticket/.test(url) && t.length > 80 && !isGateLoadingText(t))
     ) {
       return active;
@@ -351,11 +352,91 @@ export async function waitForSeatUi(
   return null;
 }
 
+/** 예매 안내/시야방해 모달 닫기 */
+export async function dismissBookingNotices(page: Page): Promise<void> {
+  for (const name of ["확인", "닫기", "동의", "다음에"]) {
+    for (const root of pagesAndFrames(page)) {
+      const btn = root.getByRole("button", { name: new RegExp(`^${name}$`) });
+      const n = await btn.count().catch(() => 0);
+      for (let i = 0; i < Math.min(n, 3); i++) {
+        const b = btn.nth(i);
+        if (await b.isVisible().catch(() => false)) {
+          const ctx = await root
+            .locator("body")
+            .innerText()
+            .catch(() => "");
+          if (/예매 안내|시야방해|유의사항|안내/.test(ctx)) {
+            await b.click({ timeout: 2000 }).catch(() => null);
+            await page.waitForTimeout(400);
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 보안문자(캡차) 입력. visionFn이 있으면 이미지→문자열로 읽고, 없으면 수동 대기.
+ * 자동 OCR은 환경에 따라 실패할 수 있음.
+ */
+export async function solveCaptchaIfPresent(
+  page: Page,
+  opts?: { text?: string; waitManualMs?: number },
+): Promise<boolean> {
+  const body = await page.locator("body").innerText().catch(() => "");
+  const hasCaptcha =
+    /보안문자|자동입력|봇|captcha|Captcha/i.test(body) ||
+    (await page.locator("img[src*='captcha'], img[alt*='문자'], input[name*='captcha' i]").count()) >
+      0;
+  if (!hasCaptcha) return false;
+
+  if (opts?.text) {
+    const input = page
+      .locator(
+        "input[name*='captcha' i], input[placeholder*='문자'], input[type='text']",
+      )
+      .first();
+    if (await input.isVisible().catch(() => false)) {
+      await input.fill(opts.text);
+      const submit = page.getByRole("button", {
+        name: /확인|제출|입력|완료/,
+      });
+      if (await submit.first().isVisible().catch(() => false)) {
+        await submit.first().click();
+      }
+      await page.waitForTimeout(800);
+      return true;
+    }
+  }
+
+  log.warn(
+    "보안문자 감지 — Take Control로 입력하거나 text를 넘기세요. 대기 중...",
+  );
+  const waitMs = opts?.waitManualMs ?? 120000;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    const t = await page.locator("body").innerText().catch(() => "");
+    if (!/보안문자|자동입력 방지/.test(t)) return true;
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
 export async function selectGoodConsecutiveSeats(
   page: Page,
   config: AppConfig,
 ): Promise<SelectedSeat[]> {
-  const root = await waitForSeatUi(page);
+  // onestop/seat 등 실측 URL 우선
+  const seatPage =
+    page
+      .context()
+      .pages()
+      .find((p) => /onestop\/seat|gates\/ticket/i.test(p.url())) || page;
+
+  await dismissBookingNotices(seatPage);
+  await solveCaptchaIfPresent(seatPage);
+
+  const root = await waitForSeatUi(seatPage);
   if (!root) {
     throw new Error("좌석 선택 화면을 찾지 못했습니다. 로그인이 끝났는지 확인하세요.");
   }
