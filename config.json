@@ -1,0 +1,36 @@
+{
+  "postseasonUrl": "https://nol.yanolja.com/ticket/genre/sports/postseason",
+  "pollIntervalMs": 1500,
+  "seatCount": 2,
+  "requireConsecutive": true,
+  "headless": false,
+  "profileDir": ".browser-profile",
+  "matchKeywords": [
+    "기아",
+    "KIA",
+    "Kia",
+    "광주",
+    "챔피언스",
+    "준플레이오프",
+    "준PO"
+  ],
+  "homeVenueKeywords": ["광주", "챔피언스"],
+  "preferredGrades": [
+    "중앙테이블",
+    "중앙석",
+    "내야석",
+    "내야지정석",
+    "테이블석",
+    "3루 내야",
+    "3루내야",
+    "K9",
+    "일반석 K9",
+    "응원특별석",
+    "내야",
+    "3루"
+  ],
+  "avoidGrades": ["외야", "스카이박스", "스윗박스", "휠체어", "시야방해"],
+  "preferHomeSide": "3루",
+  "maxGradeAttempts": 40,
+  "openEarlyMs": 2000
+}
