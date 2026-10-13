@@ -249,19 +249,75 @@ async function clickNextOrConfirm(root: Page | Frame): Promise<boolean> {
   return false;
 }
 
+/** 대기열 페이지면 true */
+export async function isWaitingRoom(page: Page): Promise<boolean> {
+  const url = page.url();
+  if (/\/waiting/.test(url)) return true;
+  const t = await page.locator("body").innerText().catch(() => "");
+  return /접속 인원이 많아 대기|나의 대기순서|현재 대기인원/.test(t);
+}
+
+/** 대기열이 끝날 때까지 대기 (새로고침 금지). */
+export async function waitOutQueue(
+  page: Page,
+  timeoutMs = 30 * 60 * 1000,
+): Promise<Page> {
+  const deadline = Date.now() + timeoutMs;
+  let active = page;
+  while (Date.now() < deadline) {
+    const pages = page.context().pages();
+    active =
+      pages.find((p) => /gates\/ticket|Seat|Book|booking/i.test(p.url())) ||
+      pages[pages.length - 1] ||
+      page;
+
+    if (!(await isWaitingRoom(active))) {
+      // 아직 로딩 중일 수 있음
+      const t = await active.locator("body").innerText().catch(() => "");
+      if (/좌석선택|등급선택|잔여석|원하는 좌석/.test(t) || /gates\/ticket/.test(active.url())) {
+        if (!/나의 대기순서|접속 인원이 많아 대기/.test(t)) return active;
+      }
+    } else {
+      const order = await active
+        .locator("body")
+        .innerText()
+        .then((t) => t.match(/나의 대기순서\s*(\d+)/)?.[1])
+        .catch(() => null);
+      if (order) log.info(`대기열 순서: ${order}`);
+    }
+    await page.waitForTimeout(2000);
+  }
+  throw new Error("대기열 타임아웃");
+}
+
 export async function waitForSeatUi(
   page: Page,
-  timeoutMs = 120000,
+  timeoutMs = 180000,
 ): Promise<Page | Frame | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // 대기열이면 좌석 UI로 보지 않음
+    for (const p of page.context().pages()) {
+      if (await isWaitingRoom(p)) {
+        await page.waitForTimeout(1500);
+        continue;
+      }
+    }
     for (const root of pagesAndFrames(page)) {
       const has = await root
         .evaluate(() => {
           const t = document.body?.innerText || "";
+          if (/접속 인원이 많아 대기|나의 대기순서|현재 대기인원/.test(t)) {
+            return false;
+          }
+          if (/오류가 발생했습니다/.test(t)) return false;
+          // 실제 좌석/등급 선택 화면 신호
           return (
-            /좌석|등급|구역|내야|외야|열|번/.test(t) &&
-            !/오류가 발생했습니다/.test(t)
+            (/등급선택|좌석선택|잔여석|원하시는 좌석|좌석을 선택/.test(t) ||
+              /내야|외야|테이블석|응원/.test(t)) &&
+            document.querySelectorAll(
+              "svg rect, svg circle, [class*='seat' i], [class*='Seat'], [data-seat], button, li",
+            ).length > 5
           );
         })
         .catch(() => false);

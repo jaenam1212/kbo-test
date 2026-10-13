@@ -8,18 +8,22 @@ import {
   pickBestGoods,
 } from "./goods.js";
 import { log } from "./logger.js";
-import { selectGoodConsecutiveSeats, stopBeforePayment } from "./seats.js";
+import {
+  selectGoodConsecutiveSeats,
+  stopBeforePayment,
+  waitOutQueue,
+} from "./seats.js";
 
 const NOL_LOGIN_HOST = "accounts.yanolja.com";
 const POSTSEASON = "https://nol.yanolja.com/ticket/genre/sports/postseason";
 
-/** NOL 티켓 '예매하기'가 넘기는 좌석 게이트 URL. */
+/** NOL 티켓 '예매하기'가 넘기는 게이트 URL (실측: /gates/ticket/{goodsCode}). */
 function nolTicketGateUrl(g: SportsGoods): string {
-  const u = new URL("https://tickets.interpark.com/gates/partner");
+  const u = new URL(
+    `https://tickets.interpark.com/gates/ticket/${g.goodsCode}`,
+  );
   u.searchParams.set("bc", "61776");
-  u.searchParams.set("gc", g.goodsCode);
   u.searchParams.set("pc", g.placeCode);
-  u.searchParams.set("cc", "Gates");
   return u.toString();
 }
 
@@ -124,9 +128,9 @@ async function clickBookForGoods(
     return;
   }
 
-  // DOM 매칭 실패 시 NOL 티켓 좌석 게이트로 직접 진입
+  // DOM 매칭 실패 시 NOL 티켓 게이트로 직접 진입
   const gate = nolTicketGateUrl(g);
-  log.warn("예매 버튼을 못 찾아 NOL 티켓 좌석 화면으로 이동합니다.");
+  log.warn("예매 버튼을 못 찾아 NOL 티켓 게이트로 이동합니다.");
   await page.goto(gate, { waitUntil: "domcontentloaded", timeout: 60000 });
 }
 
@@ -217,12 +221,18 @@ export async function runBookFlow(
       // 새 탭으로 게이트가 열릴 수 있음
       await page.waitForTimeout(2000);
       const pages = context.pages();
-      const active =
+      let active =
         pages.find((p) =>
-          /gates\/partner|Seat|seat|Book|book|tickets\./i.test(p.url()),
+          /gates\/ticket|gates\/partner|waiting|Seat|Book|tickets\./i.test(
+            p.url(),
+          ),
         ) ||
         pages[pages.length - 1] ||
         page;
+
+      // 대기열 통과 대기 (새로고침 금지)
+      active = await waitOutQueue(active);
+      log.ok("대기열 통과 / 좌석 화면 진입 시도");
 
       const selected = await selectGoodConsecutiveSeats(active, config);
       log.ok(
