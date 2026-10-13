@@ -257,37 +257,60 @@ export async function isWaitingRoom(page: Page): Promise<boolean> {
   return /접속 인원이 많아 대기|나의 대기순서|현재 대기인원/.test(t);
 }
 
-/** 대기열이 끝날 때까지 대기 (새로고침 금지). */
+function isGateLoadingText(t: string): boolean {
+  return /예매에 필요한 정보를 확인|잠시만 기다려|로딩/.test(t);
+}
+
+/** 로딩/대기열이 끝나고 예매 화면이 될 때까지 대기 (대기열에선 새로고침 금지). */
 export async function waitOutQueue(
   page: Page,
-  timeoutMs = 30 * 60 * 1000,
+  timeoutMs = 45 * 60 * 1000,
 ): Promise<Page> {
   const deadline = Date.now() + timeoutMs;
   let active = page;
+  let loadingSince = Date.now();
   while (Date.now() < deadline) {
     const pages = page.context().pages();
     active =
-      pages.find((p) => /gates\/ticket|Seat|Book|booking/i.test(p.url())) ||
+      pages.find((p) =>
+        /gates\/ticket|waiting|Seat|Book|booking|onestop/i.test(p.url()),
+      ) ||
       pages[pages.length - 1] ||
       page;
 
-    if (!(await isWaitingRoom(active))) {
-      // 아직 로딩 중일 수 있음
-      const t = await active.locator("body").innerText().catch(() => "");
-      if (/좌석선택|등급선택|잔여석|원하는 좌석/.test(t) || /gates\/ticket/.test(active.url())) {
-        if (!/나의 대기순서|접속 인원이 많아 대기/.test(t)) return active;
-      }
-    } else {
-      const order = await active
-        .locator("body")
-        .innerText()
-        .then((t) => t.match(/나의 대기순서\s*(\d+)/)?.[1])
-        .catch(() => null);
+    const t = await active.locator("body").innerText().catch(() => "");
+    const url = active.url();
+
+    if (await isWaitingRoom(active)) {
+      loadingSince = Date.now();
+      const order = t.match(/나의 대기순서\s*(\d+)/)?.[1];
       if (order) log.info(`대기열 순서: ${order}`);
+      await page.waitForTimeout(2000);
+      continue;
     }
-    await page.waitForTimeout(2000);
+
+    if (isGateLoadingText(t) && !/좌석선택|등급선택|잔여석/.test(t)) {
+      // 로딩이 너무 길면 한 번만 게이트 재진입 (대기열이 아닐 때만)
+      if (Date.now() - loadingSince > 45000 && /gates\/ticket/.test(url)) {
+        log.warn("게이트 로딩 지연 — 같은 URL 재로드 1회");
+        await active.reload({ waitUntil: "domcontentloaded" }).catch(() => null);
+        loadingSince = Date.now();
+      }
+      await page.waitForTimeout(1500);
+      continue;
+    }
+
+    // 실제 예매/좌석 관련 화면
+    if (
+      /좌석선택|등급선택|잔여석|원하시는 좌석|좌석을 선택|가격|매수/.test(t) ||
+      (/gates\/ticket/.test(url) && t.length > 80 && !isGateLoadingText(t))
+    ) {
+      return active;
+    }
+
+    await page.waitForTimeout(1500);
   }
-  throw new Error("대기열 타임아웃");
+  throw new Error("대기열/로딩 타임아웃");
 }
 
 export async function waitForSeatUi(
