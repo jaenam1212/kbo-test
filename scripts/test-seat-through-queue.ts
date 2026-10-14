@@ -93,6 +93,9 @@ async function main() {
   await dumpSeatDom(active, "after-queue");
 
   await clickConfirmAndBookAfterQueue(active);
+  // 게이트 예매하기 → 대기열 → onestop 순일 수 있어 한 번 더 대기열 통과
+  active = await waitOutQueue(active, 45 * 60 * 1000);
+  await clickConfirmAndBookAfterQueue(active);
   await dumpSeatDom(active, "after-confirm-book");
 
   await dismissBookingNotices(active);

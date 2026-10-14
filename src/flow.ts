@@ -236,6 +236,8 @@ export async function runBookFlow(
       log.ok("대기열 통과 — 예매 확인(확인하고 예매하기) 처리");
 
       await clickConfirmAndBookAfterQueue(active);
+      active = await waitOutQueue(active);
+      await clickConfirmAndBookAfterQueue(active);
 
       const selected = await selectGoodConsecutiveSeats(active, config);
       log.ok(

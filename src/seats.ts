@@ -334,6 +334,14 @@ export async function clickConfirmAndBookAfterQueue(
         await gateBtn.click({ timeout: 8000 }).catch(() => null);
         clicked = true;
         await page.waitForTimeout(1500);
+        // 게이트 예매하기 직후 대기열이 다시 걸릴 수 있음 — 통과까지 대기
+        const pages = page.context().pages();
+        let active =
+          pages.find((p) => /waiting|gates|onestop/i.test(p.url())) || page;
+        if (await isWaitingRoom(active)) {
+          log.info("게이트 이후 대기열 — 통과 대기 (새로고침 금지)");
+          active = await waitOutQueue(active);
+        }
         break;
       }
 
