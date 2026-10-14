@@ -34,10 +34,10 @@ async function collectGradeCandidates(root: Page | Frame): Promise<
         (x) =>
           x.label.length >= 2 &&
           x.label.length <= 80 &&
-          /(석|내야|외야|테이블|응원|중앙|K\d|3루|1루|일반|지정|블루|오렌지|레드|네이비|그린)/.test(
+          /(석|내야|외야|테이블|응원|중앙|K\d|3루|1루|일반|지정|블루|오렌지|레드|네이비|그린|VIP|R석|S석)/.test(
             x.label,
           ) &&
-          !/예매하기|결제|다음단계|이전|닫기|취소|확인하고|로그인|등급 별/.test(
+          !/예매하기|결제|다음단계|이전|닫기|취소|확인하고|로그인|등급 별|선택 완료/.test(
             x.label,
           ),
       );
@@ -486,9 +486,12 @@ export async function waitOutQueue(
   let loadingSince = Date.now();
   while (Date.now() < deadline) {
     const pages = page.context().pages();
+    // onestop/seat 를 gates 보다 우선 (게이트 탭이 남아 있으면 좌석 탭을 놓침)
     active =
+      pages.find((p) => /onestop\/seat/i.test(p.url())) ||
+      pages.find((p) => /\/waiting/i.test(p.url())) ||
       pages.find((p) =>
-        /gates\/ticket|waiting|Seat|Book|booking|onestop/i.test(p.url()),
+        /gates\/ticket|Seat|Book|booking|onestop/i.test(p.url()),
       ) ||
       pages[pages.length - 1] ||
       page;
@@ -559,10 +562,12 @@ export async function waitForSeatUi(
           if (/오류가 발생했습니다/.test(t)) return false;
           // 실제 좌석/등급 선택 화면 신호
           return (
-            (/등급선택|좌석선택|잔여석|원하시는 좌석|좌석을 선택|관람 구역/.test(
+            (/등급선택|좌석선택|잔여석|원하시는 좌석|좌석을 선택|관람 구역|선택 좌석|선택 완료|STAGE/.test(
               t,
             ) ||
-              /내야|외야|테이블석|응원|블루석|레드석|네이비/.test(t)) &&
+              /내야|외야|테이블석|응원|블루석|레드석|네이비|VIP|R석|S석/.test(
+                t,
+              )) &&
             document.querySelectorAll(
               "svg rect, svg circle, [class*='seat' i], [class*='Seat'], [data-seat], button, li",
             ).length > 5
