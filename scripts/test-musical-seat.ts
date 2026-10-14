@@ -240,7 +240,20 @@ async function main() {
         path: "/tmp/musical-select-ok.png",
         fullPage: true,
       });
-      // 가격 선택(일반 N매) → 예매하기 → 결제 직전
+      // 가격 선택 진입 대기 후 일반 N매 → 예매하기 → 결제 직전
+      for (let i = 0; i < 40; i++) {
+        const u = active.url();
+        const t = await active.locator("body").innerText().catch(() => "");
+        if (/step=price/i.test(u) || /가격 선택|티켓 금액/.test(t)) break;
+        // 선택 완료가 안 먹었으면 한 번 더
+        if (i === 5 || i === 15) {
+          const btn = active.getByRole("button", { name: /선택\s*완료/ }).first();
+          if (await btn.isVisible().catch(() => false)) {
+            await btn.click({ timeout: 5000 }).catch(() => null);
+          }
+        }
+        await active.waitForTimeout(500);
+      }
       await assignGeneralPriceAndBook(active, config.seatCount);
       await active
         .screenshot({ path: "/tmp/musical-after-price.png", fullPage: true })

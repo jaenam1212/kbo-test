@@ -333,6 +333,24 @@ async function selectionConfirmed(page: Page): Promise<boolean> {
   return /선택 좌석/.test(t);
 }
 
+async function waitForPriceOrNext(page: Page, timeoutMs = 20000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const url = page.url();
+    const t = await page.locator("body").innerText().catch(() => "");
+    if (/step=price/i.test(url) || /가격 선택|티켓 금액/.test(t)) {
+      log.ok("가격 선택 화면 진입");
+      return;
+    }
+    if (/결제|배송|수령|주문자|할인수단/.test(t)) {
+      log.ok("결제/주문자 단계 진입");
+      return;
+    }
+    await page.waitForTimeout(500);
+  }
+  log.warn("가격/결제 화면 전환 대기 시간 초과");
+}
+
 async function clickNextOrConfirm(root: Page | Frame): Promise<boolean> {
   const names = [
     /좌석\s*선택\s*완료/,
@@ -819,10 +837,8 @@ export async function selectGoodConsecutiveSeats(
         continue;
       }
       log.ok("좌석 선택 확인됨");
-      for (const rr of pagesAndFrames(page)) {
-        await clickNextOrConfirm(rr);
-      }
-      await page.waitForTimeout(1000);
+      await clickNextOrConfirm(seatPage);
+      await waitForPriceOrNext(seatPage);
       return pair.labels.map((label) => ({ label, grade: clickName }));
     }
   }
@@ -841,8 +857,8 @@ export async function selectGoodConsecutiveSeats(
       continue;
     }
     log.ok("좌석 선택 확인됨");
-    for (const rr of pagesAndFrames(page)) await clickNextOrConfirm(rr);
-    await page.waitForTimeout(1000);
+    await clickNextOrConfirm(seatPage);
+    await waitForPriceOrNext(seatPage);
     return pair.labels.map((label) => ({ label }));
   }
 
