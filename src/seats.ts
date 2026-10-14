@@ -70,12 +70,20 @@ async function clickGradeByLabel(
   return false;
 }
 
+function isNoiseSeatLabel(label: string): boolean {
+  return /선택 시간|등급|가격|예매|확인|마이페이지|관람 구역|입력완료|보안|문자|휠체어 장애인석은|익사이팅석은|시야방해|유의사항|닫기|취소|로그인|결제/.test(
+    label,
+  );
+}
+
 /** 선택 가능한 좌석 DOM을 모아 2연석을 고른다. */
 async function findConsecutiveSeats(
   root: Page | Frame,
   count: number,
 ): Promise<{ indexes: number[]; labels: string[] } | null> {
   const seats = await root.evaluate(() => {
+    const noise =
+      /선택 시간|등급|가격|예매|확인|마이페이지|관람 구역|입력완료|보안|문자|유의사항|닫기|취소|로그인|결제|zoom|확대|축소/i;
     const selectors = [
       "[data-seat-status='available']",
       "[data-status='available']",
@@ -84,22 +92,36 @@ async function findConsecutiveSeats(
       "circle.seat:not(.disabled):not(.sold)",
       "[class*='Seat'][class*='available']",
       "[class*='seat'][class*='Available']",
-      "button[aria-label*='열']",
-      "button[aria-label*='석']",
+      "button[aria-label*='열'][aria-label*='번']",
+      "[role='button'][aria-label*='열']",
       "[role='button'][aria-label*='좌석']",
     ];
     const nodes: HTMLElement[] = [];
+    const push = (el: Element) => {
+      const h = el as HTMLElement;
+      const label = (
+        h.getAttribute("aria-label") ||
+        h.getAttribute("title") ||
+        h.getAttribute("data-seat") ||
+        h.textContent ||
+        ""
+      ).replace(/\s+/g, " ").trim();
+      if (noise.test(label)) return;
+      if (!nodes.includes(h)) nodes.push(h);
+    };
     for (const sel of selectors) {
-      document.querySelectorAll(sel).forEach((el) => {
-        if (!nodes.includes(el as HTMLElement)) nodes.push(el as HTMLElement);
-      });
+      document.querySelectorAll(sel).forEach(push);
     }
-    // SVG path/rect with fill that looks selectable
+    // SVG path/rect with fill that looks selectable (작은 좌석 점만)
     if (nodes.length === 0) {
       document.querySelectorAll("svg rect, svg circle, svg path").forEach((el) => {
         const cls = (el.getAttribute("class") || "").toLowerCase();
         const fill = (el.getAttribute("fill") || "").toLowerCase();
         const pointer = getComputedStyle(el).cursor;
+        const box = (el as HTMLElement).getBoundingClientRect();
+        if (box.width < 2 || box.height < 2 || box.width > 40 || box.height > 40) {
+          return;
+        }
         if (
           pointer === "pointer" ||
           /(avail|empty|on|open|select)/.test(cls) ||
@@ -107,7 +129,7 @@ async function findConsecutiveSeats(
           fill === "#fff"
         ) {
           if (!/(sold|disable|close|selected|mine)/.test(cls)) {
-            nodes.push(el as HTMLElement);
+            push(el);
           }
         }
       });
@@ -146,11 +168,15 @@ async function findConsecutiveSeats(
     });
   });
 
-  if (seats.length < count) return null;
+  const seatsClean = seats.filter(
+    (s) => !isNoiseSeatLabel(s.label) && s.w > 0 && s.h > 0 && s.w <= 48 && s.h <= 48,
+  );
+
+  if (seatsClean.length < count) return null;
 
   // Prefer same-row consecutive numbers
-  const byRow = new Map<string, typeof seats>();
-  for (const s of seats) {
+  const byRow = new Map<string, typeof seatsClean>();
+  for (const s of seatsClean) {
     const key = s.row || `y:${Math.round(s.y)}`;
     const arr = byRow.get(key) || [];
     arr.push(s);
@@ -170,6 +196,7 @@ async function findConsecutiveSeats(
         nums.every((n) => n > 0) &&
         nums.every((n, idx) => idx === 0 || n === nums[idx - 1]! + 1);
       const nearByX =
+        count === 1 ||
         slice.every((s, idx) => {
           if (idx === 0) return true;
           const prev = slice[idx - 1]!;
@@ -197,6 +224,8 @@ async function clickSeatIndexes(
   indexes: number[],
 ): Promise<boolean> {
   return root.evaluate((idxs) => {
+    const noise =
+      /선택 시간|등급|가격|예매|확인|마이페이지|관람 구역|입력완료|보안|문자|유의사항|닫기|취소|로그인|결제/i;
     const selectors = [
       "[data-seat-status='available']",
       "[data-status='available']",
@@ -205,22 +234,35 @@ async function clickSeatIndexes(
       "circle.seat:not(.disabled):not(.sold)",
       "[class*='Seat'][class*='available']",
       "[class*='seat'][class*='Available']",
-      "button[aria-label*='열']",
-      "button[aria-label*='석']",
+      "button[aria-label*='열'][aria-label*='번']",
+      "[role='button'][aria-label*='열']",
       "[role='button'][aria-label*='좌석']",
     ];
     const nodes: HTMLElement[] = [];
+    const push = (el: Element) => {
+      const h = el as HTMLElement;
+      const label = (
+        h.getAttribute("aria-label") ||
+        h.getAttribute("title") ||
+        h.textContent ||
+        ""
+      ).replace(/\s+/g, " ").trim();
+      if (noise.test(label)) return;
+      if (!nodes.includes(h)) nodes.push(h);
+    };
     for (const sel of selectors) {
-      document.querySelectorAll(sel).forEach((el) => {
-        if (!nodes.includes(el as HTMLElement)) nodes.push(el as HTMLElement);
-      });
+      document.querySelectorAll(sel).forEach(push);
     }
     if (nodes.length === 0) {
       document.querySelectorAll("svg rect, svg circle, svg path").forEach((el) => {
         const cls = (el.getAttribute("class") || "").toLowerCase();
         const pointer = getComputedStyle(el).cursor;
+        const box = (el as HTMLElement).getBoundingClientRect();
+        if (box.width < 2 || box.height < 2 || box.width > 40 || box.height > 40) {
+          return;
+        }
         if (pointer === "pointer" || /(avail|empty|on|open|select)/.test(cls)) {
-          nodes.push(el as HTMLElement);
+          push(el);
         }
       });
     }
@@ -620,27 +662,37 @@ export async function selectGoodConsecutiveSeats(
     const cands = await collectGradeCandidates(r).catch(() => []);
     for (const c of cands) {
       if (graded.some((g) => g.label === c.label)) continue;
+      // 가격표(…120,000원)는 제외 — 잔여 목록만 사용
+      if (/원/.test(c.label)) continue;
       if (c.remaining === 0) continue;
+      // 잔여 숫자가 안 보이면 후순위 (매진 등급일 수 있음)
       const s =
         scoreGradeLabel(c.label, config) +
         (c.remaining != null && c.remaining > 0
-          ? Math.min(30, c.remaining)
-          : 0);
+          ? 40 + Math.min(30, c.remaining)
+          : -20);
       if (s <= -500) continue;
       graded.push({ label: c.label, s, remaining: c.remaining });
     }
   }
-  graded.sort((a, b) => {
+  // 잔여>0 테이블석이 있으면 그것만 우선
+  const tableAvail = graded.filter(
+    (g) => /테이블/.test(g.label) && (g.remaining == null || g.remaining > 0),
+  );
+  const pool = tableAvail.some((g) => (g.remaining ?? 0) > 0)
+    ? graded.filter((g) => (g.remaining ?? 0) > 0)
+    : graded.filter((g) => g.remaining == null || g.remaining > 0);
+  pool.sort((a, b) => {
     const aTable = /테이블/.test(a.label) ? 1 : 0;
     const bTable = /테이블/.test(b.label) ? 1 : 0;
     if (aTable !== bTable) return bTable - aTable;
     return b.s - a.s;
   });
 
-  const gradeLabels = graded.map((g) => g.label);
+  const gradeLabels = pool.map((g) => g.label);
   log.info(
-    "등급 후보(테이블 우선):",
-    graded
+    "등급 후보(테이블·잔여 우선):",
+    pool
       .slice(0, 10)
       .map((g) => `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`)
       .join(" / ") || "(자동 감지 실패 — preferredGrades 기준)",
@@ -669,47 +721,33 @@ export async function selectGoodConsecutiveSeats(
         break;
       }
     }
-    if (clicked) await page.waitForTimeout(1200);
-    await solveCaptchaIfPresent(seatPage, { ocrAttempts: 2, waitManualMs: 60000 });
+    if (!clicked) {
+      log.warn(`등급 클릭 실패: ${clickName}`);
+      continue;
+    }
+    await page.waitForTimeout(1500);
+    await solveCaptchaIfPresent(seatPage, {
+      ocrAttempts: 2,
+      waitManualMs: 60000,
+    });
 
-    // 테이블석(N인)은 구역/테이블 유닛 클릭이 좌석 선택일 수 있음
+    // 테이블석(N인) 패키지는 유닛 1개 = N명 → 1칸만 선택
     const wantTable = /테이블/.test(grade);
-    const seatNeed = wantTable ? Math.min(config.seatCount, 1) : config.seatCount;
+    const need = wantTable && /\(\d+\s*인\)/.test(grade) ? 1 : config.seatCount;
 
     for (const r of pagesAndFrames(page)) {
-      const pair = await findConsecutiveSeats(
-        r,
-        wantTable && /테이블석\(\d+인\)/.test(grade)
-          ? 1
-          : config.seatCount,
-      );
-      if (!pair) {
-        // 테이블: 선택 가능한 단일 좌석/유닛이라도 시도
-        if (!wantTable) continue;
-        const one = await findConsecutiveSeats(r, 1);
-        if (!one) continue;
-        log.ok(`테이블 유닛 선택: ${one.labels.join(" + ")}`);
-        await clickSeatIndexes(r, one.indexes);
-        await page.waitForTimeout(800);
-        for (const rr of pagesAndFrames(page)) await clickNextOrConfirm(rr);
-        return one.labels.map((label) => ({ label, grade }));
-      }
-      log.ok(`연석 발견: ${pair.labels.join(" + ")}`);
+      const pair = await findConsecutiveSeats(r, need);
+      if (!pair) continue;
+      if (pair.labels.some(isNoiseSeatLabel)) continue;
+      log.ok(`좌석 발견: ${pair.labels.join(" + ")}`);
       const ok = await clickSeatIndexes(r, pair.indexes);
       if (!ok) continue;
       await page.waitForTimeout(800);
-      // 테이블은 seatCount만큼 유닛이 더 필요할 수 있음
-      if (wantTable && seatNeed < config.seatCount && pair.indexes.length < config.seatCount) {
-        const more = await findConsecutiveSeats(r, config.seatCount);
-        if (more && more.indexes.length >= config.seatCount) {
-          await clickSeatIndexes(r, more.indexes);
-          await page.waitForTimeout(500);
-        }
-      }
       for (const rr of pagesAndFrames(page)) {
         await clickNextOrConfirm(rr);
       }
-      return pair.labels.map((label) => ({ label, grade }));
+      await page.waitForTimeout(1000);
+      return pair.labels.map((label) => ({ label, grade: clickName }));
     }
   }
 
