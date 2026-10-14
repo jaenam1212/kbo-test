@@ -335,19 +335,31 @@ async function selectionConfirmed(page: Page): Promise<boolean> {
 
 async function clickNextOrConfirm(root: Page | Frame): Promise<boolean> {
   const names = [
-    "좌석선택완료",
-    "선택완료",
-    "다음단계",
-    "다음",
-    "결제하기",
-    "예매하기",
-    "확인",
+    /좌석\s*선택\s*완료/,
+    /선택\s*완료/,
+    /다음\s*단계/,
+    /^다음$/,
+    /결제하기/,
+    /^예매하기$/,
   ];
-  for (const name of names) {
-    const btn = root.getByRole("button", { name: new RegExp(name) }).first();
+  for (const re of names) {
+    const btn = root.getByRole("button", { name: re }).first();
     if (await btn.isVisible().catch(() => false)) {
-      // 결제 최종 승인/카드입력 직전까지만 — "결제하기"는 누르되 카드 정보는 입력하지 않음
+      const disabled = await btn.isDisabled().catch(() => false);
+      if (disabled) continue;
+      log.info(`다음 단계 클릭: ${re}`);
       await btn.click({ timeout: 5000 }).catch(() => null);
+      return true;
+    }
+    const fallback = root
+      .locator("button, a, [role='button']")
+      .filter({ hasText: re })
+      .first();
+    if (await fallback.isVisible().catch(() => false)) {
+      const disabled = await fallback.isDisabled().catch(() => false);
+      if (disabled) continue;
+      log.info(`다음 단계 클릭(fallback): ${re}`);
+      await fallback.click({ timeout: 5000 }).catch(() => null);
       return true;
     }
   }
