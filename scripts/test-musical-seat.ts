@@ -17,6 +17,7 @@ import {
   waitOutQueue,
 } from "../src/seats.js";
 import { pageHasCaptcha } from "../src/captcha.js";
+import { assignGeneralPriceAndBook } from "../src/price.js";
 import { log } from "../src/logger.js";
 import type { AppConfig } from "../src/types.js";
 
@@ -239,6 +240,11 @@ async function main() {
         path: "/tmp/musical-select-ok.png",
         fullPage: true,
       });
+      // 가격 선택(일반 N매) → 예매하기 → 결제 직전
+      await assignGeneralPriceAndBook(active, config.seatCount);
+      await active
+        .screenshot({ path: "/tmp/musical-after-price.png", fullPage: true })
+        .catch(() => null);
       await stopBeforePayment(active);
       await active
         .screenshot({ path: "/tmp/musical-payment-stop.png", fullPage: true })
