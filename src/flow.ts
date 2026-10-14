@@ -9,6 +9,7 @@ import {
 } from "./goods.js";
 import { log } from "./logger.js";
 import {
+  clickConfirmAndBookAfterQueue,
   selectGoodConsecutiveSeats,
   stopBeforePayment,
   waitOutQueue,
@@ -232,7 +233,9 @@ export async function runBookFlow(
 
       // 대기열 통과 대기 (새로고침 금지)
       active = await waitOutQueue(active);
-      log.ok("대기열 통과 / 좌석 화면 진입 시도");
+      log.ok("대기열 통과 — 예매 확인(확인하고 예매하기) 처리");
+
+      await clickConfirmAndBookAfterQueue(active);
 
       const selected = await selectGoodConsecutiveSeats(active, config);
       log.ok(

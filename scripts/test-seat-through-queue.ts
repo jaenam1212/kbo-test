@@ -1,16 +1,20 @@
 /**
- * 대기열 통과 → 실제 좌석맵 DOM 덤프 → 2연석 선택 시도 (결제 안 함)
+ * 대기열 통과 → 안내모달 → 보안문자 OCR(최대2) → 2연석 시도 (결제 안 함)
  */
 import { chromium, type Page } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
 import { loadConfig } from "../src/config.js";
 import {
+  clickConfirmAndBookAfterQueue,
+  dismissBookingNotices,
   isWaitingRoom,
   selectGoodConsecutiveSeats,
+  solveCaptchaIfPresent,
   waitForSeatUi,
   waitOutQueue,
 } from "../src/seats.js";
+import { pageHasCaptcha } from "../src/captcha.js";
 import { log } from "../src/logger.js";
 
 async function dumpSeatDom(page: Page, tag: string) {
@@ -30,59 +34,14 @@ async function dumpSeatDom(page: Page, tag: string) {
       circle: document.querySelectorAll("svg circle").length,
       path: document.querySelectorAll("svg path").length,
     };
-    const seatLike = [
-      ...document.querySelectorAll(
-        "[class*='seat' i], [class*='Seat'], [data-seat], [id*='seat' i], [class*='grade' i], [class*='Grade'], [class*='block' i]",
-      ),
-    ]
-      .slice(0, 50)
-      .map((el) => ({
-        tag: el.tagName,
-        cls: el.className?.toString?.().slice(0, 140),
-        id: el.id,
-        text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80),
-        aria: el.getAttribute("aria-label"),
-      }));
-    return { text, buttons, iframes, svg, seatLike, title: document.title, url: location.href };
+    return { text, buttons, iframes, svg, title: document.title, url: location.href };
   });
-  const out = `/tmp/seat-dump-${tag}.json`;
-  fs.writeFileSync(out, JSON.stringify(info, null, 2));
-  await page.screenshot({ path: `/tmp/seat-dump-${tag}.png`, fullPage: true }).catch(() => null);
-  log.info("dump", out, "svg", info.svg, "iframes", info.iframes.length);
-  log.info("buttons sample:", info.buttons.slice(0, 30).join(" | "));
-  log.info("text head:\n", info.text.slice(0, 1200));
-
-  for (const frame of page.frames()) {
-    if (!frame.url() || frame.url() === page.url() || frame.url() === "about:blank") continue;
-    try {
-      const f = await frame.evaluate(() => {
-        const text = (document.body?.innerText || "").slice(0, 3000);
-        const svg = {
-          rect: document.querySelectorAll("svg rect").length,
-          circle: document.querySelectorAll("svg circle").length,
-        };
-        const buttons = [...document.querySelectorAll("button, a, li")]
-          .map((el) => (el.textContent || "").replace(/\s+/g, " ").trim())
-          .filter((t) => t && t.length < 50)
-          .slice(0, 80);
-        const seatLike = [
-          ...document.querySelectorAll(
-            "[class*='seat' i], [class*='Seat'], [data-seat], svg rect, svg circle",
-          ),
-        ].length;
-        return { text, svg, buttons, seatLike, url: location.href };
-      });
-      fs.writeFileSync(
-        `/tmp/seat-dump-${tag}-frame.json`,
-        JSON.stringify(f, null, 2),
-      );
-      log.info("frame", f.url, "svg", f.svg, "seatLike", f.seatLike);
-      log.info("frame buttons", f.buttons.slice(0, 25).join(" | "));
-      log.info("frame text", f.text.slice(0, 800));
-    } catch (e) {
-      log.warn("frame dump fail", frame.url(), e);
-    }
-  }
+  fs.writeFileSync(`/tmp/seat-dump-${tag}.json`, JSON.stringify(info, null, 2));
+  await page
+    .screenshot({ path: `/tmp/seat-dump-${tag}.png`, fullPage: true })
+    .catch(() => null);
+  log.info("dump", tag, "url", info.url, "svg", info.svg);
+  log.info("text head:\n", info.text.slice(0, 1000));
   return info;
 }
 
@@ -113,47 +72,80 @@ async function main() {
     return r.json();
   });
   log.info("auth", auth);
-  if (!auth?.isLoggedIn) throw new Error("로그인 필요");
+  if (!auth?.isLoggedIn) throw new Error("로그인 필요 — Take Control로 NOL 로그인 후 재실행");
 
-  log.info("예매하기 클릭 → 대기열/좌석 테스트");
+  log.info("예매하기 클릭 → 대기열/좌석/OCR 테스트");
   await page.locator("button", { hasText: "예매하기" }).first().click();
   await page.waitForTimeout(3000);
 
   let active =
-    context.pages().find((p) => /gates|waiting|ticket/i.test(p.url())) || page;
+    context.pages().find((p) => /gates|waiting|ticket|onestop/i.test(p.url())) ||
+    page;
   log.info("after click", active.url());
 
   if (await isWaitingRoom(active)) {
-    log.info("대기열 진입 — 통과할 때까지 대기 (새로고침 안 함)");
+    log.info("대기열 진입 — 통과까지 대기 (새로고침 금지)");
   }
 
   active = await waitOutQueue(active, 45 * 60 * 1000);
-  log.ok("대기열 통과(또는 비대기 화면). url=", active.url());
+  log.ok("대기열/로딩 통과. url=", active.url());
   await dumpSeatDom(active, "after-queue");
 
-  const seatRoot = await waitForSeatUi(active, 120000);
+  await clickConfirmAndBookAfterQueue(active);
+  await dumpSeatDom(active, "after-confirm-book");
+
+  await dismissBookingNotices(active);
+  await page.waitForTimeout(500);
+
+  if (await pageHasCaptcha(active)) {
+    log.info("보안문자 감지 — OCR 최대 2회");
+    const ok = await solveCaptchaIfPresent(active, {
+      ocrAttempts: 2,
+      waitManualMs: 120000,
+    });
+    log.info("captcha result", ok);
+    await active.screenshot({ path: "/tmp/seat-captcha-after.png" }).catch(() => null);
+  } else {
+    log.info("보안문자 없음 (이 시점)");
+  }
+
+  // 안내 모달 다시 뜰 수 있음
+  await dismissBookingNotices(active);
+
+  const seatRoot = await waitForSeatUi(active, 180000);
   if (!seatRoot) {
-    log.error("좌석 UI 미검출 — DOM만 남기고 종료 대기");
+    log.error("좌석 UI 미검출");
     await dumpSeatDom(active, "no-seat-ui");
   } else {
     log.ok("좌석 UI 검출 — 2연석 시도");
     await dumpSeatDom(active, "seat-ui");
+    // captcha가 좌석 선택 중에 또 뜰 수 있음
     try {
       const selected = await selectGoodConsecutiveSeats(active, config);
       log.ok("선택 성공:", selected);
-      await active.screenshot({ path: "/tmp/seat-select-ok.png", fullPage: true });
-      fs.writeFileSync("/tmp/seat-select-ok.json", JSON.stringify(selected, null, 2));
+      fs.writeFileSync(
+        "/tmp/seat-select-ok.json",
+        JSON.stringify(selected, null, 2),
+      );
+      await active.screenshot({
+        path: "/tmp/seat-select-ok.png",
+        fullPage: true,
+      });
     } catch (e) {
       log.warn("자동 선택 실패:", e);
+      if (await pageHasCaptcha(active)) {
+        log.info("선택 중 보안문자 — OCR 재시도");
+        await solveCaptchaIfPresent(active, { ocrAttempts: 2, waitManualMs: 90000 });
+      }
       await active.screenshot({
         path: "/tmp/seat-select-fail.png",
         fullPage: true,
       });
+      await dumpSeatDom(active, "select-fail");
     }
   }
 
   log.info("결제 안 함. 브라우저 유지 — Take Control로 확인 가능");
-  // keep open
   await new Promise(() => {});
 }
 

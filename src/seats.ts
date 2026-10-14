@@ -249,6 +249,108 @@ async function clickNextOrConfirm(root: Page | Frame): Promise<boolean> {
   return false;
 }
 
+const POST_QUEUE_BOOK_LABELS = [
+  /확인하고\s*예매하기/,
+  /확인\s*하고\s*예매하기/,
+  /예매\s*정보\s*확인\s*후\s*예매하기/,
+];
+
+/** 대기열 통과 직후 뜨는 파란 '확인하고 예매하기' 등 — 클릭 후 좌석 단계로 진행 */
+export async function clickConfirmAndBookAfterQueue(
+  page: Page,
+  timeoutMs = 180000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  let clicked = false;
+
+  while (Date.now() < deadline) {
+    for (const root of pagesAndFrames(page)) {
+      const body = await root.locator("body").innerText().catch(() => "");
+      if (/접속 인원이 많아 대기|나의 대기순서|현재 대기인원/.test(body)) {
+        await page.waitForTimeout(1500);
+        continue;
+      }
+
+      for (const re of POST_QUEUE_BOOK_LABELS) {
+        const roleBtn = root.getByRole("button", { name: re }).first();
+        if (await roleBtn.isVisible().catch(() => false)) {
+          log.info("대기열 이후 '확인하고 예매하기' 클릭");
+          await roleBtn.click({ timeout: 8000 }).catch(() => null);
+          clicked = true;
+          await page.waitForTimeout(1200);
+          break;
+        }
+
+        const fallback = root
+          .locator("button, a, [role='button']")
+          .filter({ hasText: re })
+          .first();
+        if (await fallback.isVisible().catch(() => false)) {
+          log.info("대기열 이후 예매 확인 버튼 클릭 (fallback)");
+          await fallback.click({ timeout: 8000 }).catch(() => null);
+          clicked = true;
+          await page.waitForTimeout(1200);
+          break;
+        }
+      }
+    }
+
+    const stillConfirm = await pagesAndFrames(page).reduce(
+      async (accP, root) => {
+        if (await accP) return true;
+        for (const re of POST_QUEUE_BOOK_LABELS) {
+          const n = await root
+            .locator("button, a, [role='button']")
+            .filter({ hasText: re })
+            .count()
+            .catch(() => 0);
+          if (n > 0) {
+            const vis = await root
+              .locator("button, a, [role='button']")
+              .filter({ hasText: re })
+              .first()
+              .isVisible()
+              .catch(() => false);
+            if (vis) return true;
+          }
+        }
+        return false;
+      },
+      Promise.resolve(false),
+    );
+
+    if (clicked && !stillConfirm) {
+      log.ok("예매 확인 단계 통과");
+      return true;
+    }
+
+    const seatReady = await waitForSeatUi(page, 800).catch(() => null);
+    if (seatReady && !stillConfirm) {
+      if (clicked) log.ok("예매 확인 후 좌석 화면 진입");
+      return clicked || true;
+    }
+
+    if (!stillConfirm && !clicked) {
+      const url = page.url();
+      if (
+        /onestop\/seat/i.test(url) &&
+        /등급선택|좌석선택|잔여석/.test(
+          await page.locator("body").innerText().catch(() => ""),
+        )
+      ) {
+        return true;
+      }
+    }
+
+    if (stillConfirm) clicked = false;
+    await page.waitForTimeout(800);
+  }
+
+  if (clicked) return true;
+  log.warn("대기열 이후 '확인하고 예매하기' 버튼을 찾지 못했습니다 — 수동 클릭 필요할 수 있음");
+  return false;
+}
+
 /** 대기열 페이지면 true */
 export async function isWaitingRoom(page: Page): Promise<boolean> {
   const url = page.url();
@@ -300,9 +402,10 @@ export async function waitOutQueue(
       continue;
     }
 
-    // 실제 예매/좌석 관련 화면 (실측: /onestop/seat)
+    // 실제 예매/좌석 관련 화면 (실측: /onestop/seat, 대기열 직후 '확인하고 예매하기' 포함)
     if (
       /onestop\/seat/i.test(url) ||
+      POST_QUEUE_BOOK_LABELS.some((re) => re.test(t)) ||
       /좌석선택|등급선택|잔여석|원하시는 좌석|좌석을 선택|예매 안내/.test(t) ||
       (/gates\/ticket/.test(url) && t.length > 80 && !isGateLoadingText(t))
     ) {
@@ -436,6 +539,7 @@ export async function selectGoodConsecutiveSeats(
       .pages()
       .find((p) => /onestop\/seat|gates\/ticket/i.test(p.url())) || page;
 
+  await clickConfirmAndBookAfterQueue(seatPage);
   await dismissBookingNotices(seatPage);
   await solveCaptchaIfPresent(seatPage);
 
