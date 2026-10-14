@@ -97,20 +97,22 @@ async function findConsecutiveSeats(
       "[role='button'][aria-label*='좌석']",
     ];
     const nodes: HTMLElement[] = [];
-    const push = (el: Element) => {
-      const h = el as HTMLElement;
-      const label = (
-        h.getAttribute("aria-label") ||
-        h.getAttribute("title") ||
-        h.getAttribute("data-seat") ||
-        h.textContent ||
-        ""
-      ).replace(/\s+/g, " ").trim();
-      if (noise.test(label)) return;
-      if (!nodes.includes(h)) nodes.push(h);
-    };
+    // 중첩 함수 금지 — tsx가 __name을 넣어 page.evaluate에서 깨짐
     for (const sel of selectors) {
-      document.querySelectorAll(sel).forEach(push);
+      document.querySelectorAll(sel).forEach((el) => {
+        const h = el as HTMLElement;
+        const label = (
+          h.getAttribute("aria-label") ||
+          h.getAttribute("title") ||
+          h.getAttribute("data-seat") ||
+          h.textContent ||
+          ""
+        )
+          .replace(/\s+/g, " ")
+          .trim();
+        if (noise.test(label)) return;
+        if (!nodes.includes(h)) nodes.push(h);
+      });
     }
     // SVG path/rect with fill that looks selectable (작은 좌석 점만)
     if (nodes.length === 0) {
@@ -129,7 +131,18 @@ async function findConsecutiveSeats(
           fill === "#fff"
         ) {
           if (!/(sold|disable|close|selected|mine)/.test(cls)) {
-            push(el);
+            const h = el as HTMLElement;
+            const label = (
+              h.getAttribute("aria-label") ||
+              h.getAttribute("title") ||
+              h.getAttribute("data-seat") ||
+              h.textContent ||
+              ""
+            )
+              .replace(/\s+/g, " ")
+              .trim();
+            if (noise.test(label)) return;
+            if (!nodes.includes(h)) nodes.push(h);
           }
         }
       });
@@ -239,19 +252,20 @@ async function clickSeatIndexes(
       "[role='button'][aria-label*='좌석']",
     ];
     const nodes: HTMLElement[] = [];
-    const push = (el: Element) => {
-      const h = el as HTMLElement;
-      const label = (
-        h.getAttribute("aria-label") ||
-        h.getAttribute("title") ||
-        h.textContent ||
-        ""
-      ).replace(/\s+/g, " ").trim();
-      if (noise.test(label)) return;
-      if (!nodes.includes(h)) nodes.push(h);
-    };
     for (const sel of selectors) {
-      document.querySelectorAll(sel).forEach(push);
+      document.querySelectorAll(sel).forEach((el) => {
+        const h = el as HTMLElement;
+        const label = (
+          h.getAttribute("aria-label") ||
+          h.getAttribute("title") ||
+          h.textContent ||
+          ""
+        )
+          .replace(/\s+/g, " ")
+          .trim();
+        if (noise.test(label)) return;
+        if (!nodes.includes(h)) nodes.push(h);
+      });
     }
     if (nodes.length === 0) {
       document.querySelectorAll("svg rect, svg circle, svg path").forEach((el) => {
@@ -262,7 +276,17 @@ async function clickSeatIndexes(
           return;
         }
         if (pointer === "pointer" || /(avail|empty|on|open|select)/.test(cls)) {
-          push(el);
+          const h = el as HTMLElement;
+          const label = (
+            h.getAttribute("aria-label") ||
+            h.getAttribute("title") ||
+            h.textContent ||
+            ""
+          )
+            .replace(/\s+/g, " ")
+            .trim();
+          if (noise.test(label)) return;
+          if (!nodes.includes(h)) nodes.push(h);
         }
       });
     }
