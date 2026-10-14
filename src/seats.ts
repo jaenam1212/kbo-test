@@ -271,6 +271,27 @@ async function findVisibleConfirmBookButton(
   return null;
 }
 
+/** 게이트 '예매 준비가 완료됐어요' 화면의 파란 예매하기 */
+async function findGateReadyBookButton(
+  root: Page | Frame,
+): Promise<ReturnType<Page["locator"]> | null> {
+  const body = await root.locator("body").innerText().catch(() => "");
+  if (!/예매 준비가 완료|준비가 완료됐/.test(body)) return null;
+  // exact-ish: 버튼 텍스트가 예매하기만 (확인하고 예매하기는 별도)
+  const candidates = [
+    root.getByRole("button", { name: /^예매하기$/ }),
+    root.locator("button, a, [role='button']").filter({ hasText: /^예매하기$/ }),
+  ];
+  for (const loc of candidates) {
+    const n = await loc.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 3); i++) {
+      const b = loc.nth(i);
+      if (await b.isVisible().catch(() => false)) return b;
+    }
+  }
+  return null;
+}
+
 async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
   for (const root of pagesAndFrames(page)) {
     if (await findVisibleConfirmBookButton(root)) return true;
@@ -279,8 +300,9 @@ async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
 }
 
 /**
- * 대기열 통과 후 /onestop/seat 에서 뜨는 예매 안내(시야방해) 모달의
- * 파란 '확인하고 예매하기' 클릭 → 좌석 등급 선택으로 진행.
+ * 대기열/게이트 이후:
+ * 1) '예매 준비가 완료됐어요' → 파란 예매하기
+ * 2) 예매 안내(시야방해) 모달 → 확인하고 예매하기
  */
 export async function clickConfirmAndBookAfterQueue(
   page: Page,
@@ -297,6 +319,15 @@ export async function clickConfirmAndBookAfterQueue(
         continue;
       }
 
+      const gateBtn = await findGateReadyBookButton(root);
+      if (gateBtn) {
+        log.info("예매 준비 완료 화면 — '예매하기' 클릭");
+        await gateBtn.click({ timeout: 8000 }).catch(() => null);
+        clicked = true;
+        await page.waitForTimeout(1500);
+        break;
+      }
+
       const btn = await findVisibleConfirmBookButton(root);
       if (btn) {
         log.info("예매 안내 모달 — '확인하고 예매하기' 클릭");
@@ -308,16 +339,34 @@ export async function clickConfirmAndBookAfterQueue(
     }
 
     const stillConfirm = await isConfirmBookModalVisible(page);
-    if (clicked && !stillConfirm) {
-      log.ok("예매 안내 확인 완료 — 좌석 선택 진행");
+    let stillGate = false;
+    for (const root of pagesAndFrames(page)) {
+      if (await findGateReadyBookButton(root)) {
+        stillGate = true;
+        break;
+      }
+    }
+
+    if (clicked && !stillConfirm && !stillGate) {
+      await page.waitForTimeout(1000);
+      if (await isConfirmBookModalVisible(page)) continue;
+      let gateAgain = false;
+      for (const root of pagesAndFrames(page)) {
+        if (await findGateReadyBookButton(root)) {
+          gateAgain = true;
+          break;
+        }
+      }
+      if (gateAgain) continue;
+      log.ok("예매 확인/게이트 단계 통과");
       return true;
     }
 
-    // 모달 없이 이미 좌석 UI만 있으면 통과
-    if (!stillConfirm) {
+    // 모달·게이트 없이 이미 좌석 UI만 있으면 통과
+    if (!stillConfirm && !stillGate) {
       const seatReady = await waitForSeatUi(page, 1500).catch(() => null);
       if (seatReady) {
-        if (clicked) log.ok("예매 안내 확인 후 좌석 화면 진입");
+        if (clicked) log.ok("예매 확인 후 좌석 화면 진입");
         return true;
       }
     }
@@ -327,7 +376,7 @@ export async function clickConfirmAndBookAfterQueue(
 
   if (clicked) return true;
   log.warn(
-    "'확인하고 예매하기' 버튼을 찾지 못했습니다 — 수동 클릭이 필요할 수 있음",
+    "'확인하고 예매하기'/게이트 예매하기 버튼을 찾지 못했습니다 — 수동 클릭이 필요할 수 있음",
   );
   return false;
 }
@@ -383,10 +432,11 @@ export async function waitOutQueue(
       continue;
     }
 
-    // 실제 예매/좌석 관련 화면 (실측: /onestop/seat, 대기열 직후 '확인하고 예매하기' 포함)
+    // 실제 예매/좌석 관련 화면 (게이트 준비완료 / onestop / 예매안내 포함)
     if (
       /onestop\/seat/i.test(url) ||
       POST_QUEUE_BOOK_LABELS.some((re) => re.test(t)) ||
+      /예매 준비가 완료|준비가 완료됐/.test(t) ||
       /좌석선택|등급선택|잔여석|원하시는 좌석|좌석을 선택|예매 안내/.test(t) ||
       (/gates\/ticket/.test(url) && t.length > 80 && !isGateLoadingText(t))
     ) {
