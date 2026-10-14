@@ -12,40 +12,57 @@ export async function assignGeneralPriceAndBook(
   }
   log.info("가격 선택 화면 — 일반 수량 설정");
 
-  // 일반 행 찾기
-  const row = page
-    .locator("li, div, section, tr, [class*='price' i], [class*='Price']")
-    .filter({ hasText: /일반/ })
-    .filter({ hasNotText: /문화누리|패키지|할인/ })
-    .first();
-
   let clicked = 0;
-  if (await row.isVisible().catch(() => false)) {
-    const plus = row
-      .locator("button, [role='button'], span, a")
-      .filter({ hasText: /^\+$|^＋$/ })
-      .first();
-    if (await plus.isVisible().catch(() => false)) {
-      for (let i = 0; i < count; i++) {
-        await plus.click({ timeout: 3000 }).catch(() => null);
-        clicked += 1;
-        await page.waitForTimeout(300);
+  // DOM에서 '일반' 텍스트 근처의 + 버튼 좌표를 찾아 mouse 클릭
+  const plusPoint = await page.evaluate(() => {
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let el: Node | null = walk.nextNode();
+    while (el) {
+      const h = el as HTMLElement;
+      const t = (h.textContent || "").replace(/\s+/g, " ").trim();
+      if (
+        h.children.length <= 6 &&
+        /^일반/.test(t) &&
+        t.length < 40 &&
+        !/할인|패키지|문화/.test(t)
+      ) {
+        const root = h.closest("li, tr, [class*='item' i], [class*='row' i], div") || h.parentElement;
+        if (root) {
+          const btns = [
+            ...root.querySelectorAll("button, [role='button'], span, a, div"),
+          ] as HTMLElement[];
+          for (const b of btns) {
+            const bt = (b.textContent || "").trim();
+            if (bt === "+" || bt === "＋") {
+              const box = b.getBoundingClientRect();
+              if (box.width > 0 && box.height > 0) {
+                return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+              }
+            }
+          }
+        }
+      }
+      el = walk.nextNode();
+    }
+    // fallback: 페이지에서 보이는 첫 + 
+    for (const b of document.querySelectorAll("button, [role='button']")) {
+      const bt = ((b as HTMLElement).textContent || "").trim();
+      if (bt === "+" || bt === "＋") {
+        const box = (b as HTMLElement).getBoundingClientRect();
+        if (box.y > 150 && box.width > 0) {
+          return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        }
       }
     }
-  }
+    return null;
+  });
 
-  if (clicked < count) {
-    // 페이지 내 첫 번째 + 를 count번 (보통 일반이 최상단)
-    const pluses = page
-      .locator("button, [role='button']")
-      .filter({ hasText: /^\+$|^＋$/ });
-    const n = await pluses.count().catch(() => 0);
-    if (n > 0) {
-      for (let i = clicked; i < count; i++) {
-        await pluses.nth(0).click({ timeout: 3000 }).catch(() => null);
-        clicked += 1;
-        await page.waitForTimeout(300);
-      }
+  if (plusPoint) {
+    log.info(`일반 + 좌표 (${Math.round(plusPoint.x)}, ${Math.round(plusPoint.y)})`);
+    for (let i = 0; i < count; i++) {
+      await page.mouse.click(plusPoint.x, plusPoint.y, { delay: 40 });
+      clicked += 1;
+      await page.waitForTimeout(350);
     }
   }
 

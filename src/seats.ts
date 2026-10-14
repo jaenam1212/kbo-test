@@ -219,7 +219,9 @@ async function findConsecutiveSeats(
         slice.every((s, idx) => {
           if (idx === 0) return true;
           const prev = slice[idx - 1]!;
-          return Math.abs(s.x - (prev.x + prev.w)) < Math.max(40, prev.w * 1.8);
+          const gap = Math.abs(s.x - (prev.x + prev.w));
+          const centerGap = Math.abs(s.x - prev.x);
+          return gap < Math.max(55, prev.w * 3) || centerGap < Math.max(40, prev.w * 2.8);
         });
       if (!consecutive && !nearByX) continue;
       const score =
@@ -233,6 +235,25 @@ async function findConsecutiveSeats(
           score,
         };
       }
+    }
+  }
+  // 연석 휴리스틱 실패 시: 같은 행에서 x 인접 2석이라도 반환
+  if (!best && count >= 2) {
+    for (const [, rowSeats] of byRow) {
+      if (rowSeats.length < count) continue;
+      const sorted = [...rowSeats].sort((a, b) => a.x - b.x);
+      for (let i = 0; i <= sorted.length - count; i++) {
+        const slice = sorted.slice(i, i + count);
+        const span = slice[slice.length - 1]!.x - slice[0]!.x;
+        if (span > 120) continue;
+        best = {
+          indexes: slice.map((s) => s.index),
+          labels: slice.map((s) => s.label),
+          score: 10 - span,
+        };
+        break;
+      }
+      if (best) break;
     }
   }
   return best;
