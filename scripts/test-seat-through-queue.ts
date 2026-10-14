@@ -11,6 +11,7 @@ import {
   isWaitingRoom,
   selectGoodConsecutiveSeats,
   solveCaptchaIfPresent,
+  stopBeforePayment,
   waitForSeatUi,
   waitOutQueue,
 } from "../src/seats.js";
@@ -131,11 +132,20 @@ async function main() {
         path: "/tmp/seat-select-ok.png",
         fullPage: true,
       });
+      log.info("결제 화면까지 진행 후 정지 (카드 입력 안 함)");
+      await stopBeforePayment(active);
+      await active
+        .screenshot({ path: "/tmp/seat-payment-stop.png", fullPage: true })
+        .catch(() => null);
+      log.ok("결제 직전에서 멈춤 — Take Control로 결제만 직접 하세요");
     } catch (e) {
       log.warn("자동 선택 실패:", e);
       if (await pageHasCaptcha(active)) {
         log.info("선택 중 보안문자 — OCR 재시도");
-        await solveCaptchaIfPresent(active, { ocrAttempts: 2, waitManualMs: 90000 });
+        await solveCaptchaIfPresent(active, {
+          ocrAttempts: 2,
+          waitManualMs: 90000,
+        });
       }
       await active.screenshot({
         path: "/tmp/seat-select-fail.png",
@@ -145,7 +155,7 @@ async function main() {
     }
   }
 
-  log.info("결제 안 함. 브라우저 유지 — Take Control로 확인 가능");
+  log.info("브라우저 유지 — Take Control로 확인 가능");
   await new Promise(() => {});
 }
 

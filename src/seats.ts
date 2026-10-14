@@ -1,6 +1,10 @@
 import type { Frame, Page } from "playwright";
 import type { AppConfig, SelectedSeat } from "./types.js";
-import { pickBestGradeIndex, scoreGradeLabel } from "./prefer.js";
+import {
+  parseRemaining,
+  pickBestGradeIndex,
+  scoreGradeLabel,
+} from "./prefer.js";
 import { log } from "./logger.js";
 
 function pagesAndFrames(page: Page): (Page | Frame)[] {
@@ -12,12 +16,12 @@ function pagesAndFrames(page: Page): (Page | Frame)[] {
 }
 
 async function collectGradeCandidates(root: Page | Frame): Promise<
-  { index: number; label: string; score: number }[]
+  { index: number; label: string; score: number; remaining: number | null }[]
 > {
   const labels = await root.evaluate(() => {
     const nodes = [
       ...document.querySelectorAll(
-        "button, a, li, [role='button'], [class*='Grade'], [class*='grade'], [class*='SeatType']",
+        "button, a, li, [role='button'], [class*='Grade'], [class*='grade'], [class*='SeatType'], [class*='seatGrade'], [class*='SeatGrade']",
       ),
     ];
     return nodes
@@ -29,13 +33,18 @@ async function collectGradeCandidates(root: Page | Frame): Promise<
       .filter(
         (x) =>
           x.label.length >= 2 &&
-          x.label.length <= 40 &&
-          /(석|내야|외야|테이블|응원|중앙|K\d|3루|1루|일반|지정)/.test(x.label) &&
-          !/예매|결제|다음|이전|닫기|취소|확인|로그인/.test(x.label),
+          x.label.length <= 80 &&
+          /(석|내야|외야|테이블|응원|중앙|K\d|3루|1루|일반|지정|블루|오렌지|레드|네이비|그린)/.test(
+            x.label,
+          ) &&
+          !/예매하기|결제|다음단계|이전|닫기|취소|확인하고|로그인|등급 별/.test(
+            x.label,
+          ),
       );
   });
   return labels.map((x) => ({
     ...x,
+    remaining: parseRemaining(x.label),
     score: 0,
   }));
 }
@@ -596,23 +605,37 @@ export async function selectGoodConsecutiveSeats(
     throw new Error("좌석 선택 화면을 찾지 못했습니다. 로그인이 끝났는지 확인하세요.");
   }
 
-  // 등급/구역 후보
-  let gradeLabels: string[] = [];
+  // 등급/구역 후보 — 잔여 0 제외, 테이블석 점수 우선
+  type Graded = { label: string; s: number; remaining: number | null };
+  const graded: Graded[] = [];
   for (const r of pagesAndFrames(page)) {
     const cands = await collectGradeCandidates(r).catch(() => []);
     for (const c of cands) {
-      if (!gradeLabels.includes(c.label)) gradeLabels.push(c.label);
+      if (graded.some((g) => g.label === c.label)) continue;
+      if (c.remaining === 0) continue;
+      const s =
+        scoreGradeLabel(c.label, config) +
+        (c.remaining != null && c.remaining > 0
+          ? Math.min(30, c.remaining)
+          : 0);
+      if (s <= -500) continue;
+      graded.push({ label: c.label, s, remaining: c.remaining });
     }
   }
-  gradeLabels = gradeLabels
-    .map((l) => ({ l, s: scoreGradeLabel(l, config) }))
-    .filter((x) => x.s > -500)
-    .sort((a, b) => b.s - a.s)
-    .map((x) => x.l);
+  graded.sort((a, b) => {
+    const aTable = /테이블/.test(a.label) ? 1 : 0;
+    const bTable = /테이블/.test(b.label) ? 1 : 0;
+    if (aTable !== bTable) return bTable - aTable;
+    return b.s - a.s;
+  });
 
+  const gradeLabels = graded.map((g) => g.label);
   log.info(
-    "등급 후보:",
-    gradeLabels.slice(0, 8).join(" / ") || "(자동 감지 실패 — 화면 기준 진행)",
+    "등급 후보(테이블 우선):",
+    graded
+      .slice(0, 10)
+      .map((g) => `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`)
+      .join(" / ") || "(자동 감지 실패 — preferredGrades 기준)",
   );
 
   const tryOrder =
@@ -620,24 +643,61 @@ export async function selectGoodConsecutiveSeats(
       ? gradeLabels
       : [...config.preferredGrades];
 
-  for (const grade of tryOrder.slice(0, 12)) {
+  for (const grade of tryOrder.slice(0, 16)) {
     log.info(`등급 시도: ${grade}`);
+    // 클릭용 짧은 이름 (잔여 숫자·가격 제거)
+    const clickName = grade
+      .replace(/\d+원/g, "")
+      .replace(/\s*\d+\s*$/, "")
+      .replace(/\s+/g, " ")
+      .trim();
     let clicked = false;
     for (const r of pagesAndFrames(page)) {
-      if (await clickGradeByLabel(r, grade)) {
+      if (
+        (await clickGradeByLabel(r, clickName)) ||
+        (clickName !== grade && (await clickGradeByLabel(r, grade)))
+      ) {
         clicked = true;
         break;
       }
     }
     if (clicked) await page.waitForTimeout(1200);
+    await solveCaptchaIfPresent(seatPage, { ocrAttempts: 2, waitManualMs: 60000 });
+
+    // 테이블석(N인)은 구역/테이블 유닛 클릭이 좌석 선택일 수 있음
+    const wantTable = /테이블/.test(grade);
+    const seatNeed = wantTable ? Math.min(config.seatCount, 1) : config.seatCount;
 
     for (const r of pagesAndFrames(page)) {
-      const pair = await findConsecutiveSeats(r, config.seatCount);
-      if (!pair) continue;
+      const pair = await findConsecutiveSeats(
+        r,
+        wantTable && /테이블석\(\d+인\)/.test(grade)
+          ? 1
+          : config.seatCount,
+      );
+      if (!pair) {
+        // 테이블: 선택 가능한 단일 좌석/유닛이라도 시도
+        if (!wantTable) continue;
+        const one = await findConsecutiveSeats(r, 1);
+        if (!one) continue;
+        log.ok(`테이블 유닛 선택: ${one.labels.join(" + ")}`);
+        await clickSeatIndexes(r, one.indexes);
+        await page.waitForTimeout(800);
+        for (const rr of pagesAndFrames(page)) await clickNextOrConfirm(rr);
+        return one.labels.map((label) => ({ label, grade }));
+      }
       log.ok(`연석 발견: ${pair.labels.join(" + ")}`);
       const ok = await clickSeatIndexes(r, pair.indexes);
       if (!ok) continue;
       await page.waitForTimeout(800);
+      // 테이블은 seatCount만큼 유닛이 더 필요할 수 있음
+      if (wantTable && seatNeed < config.seatCount && pair.indexes.length < config.seatCount) {
+        const more = await findConsecutiveSeats(r, config.seatCount);
+        if (more && more.indexes.length >= config.seatCount) {
+          await clickSeatIndexes(r, more.indexes);
+          await page.waitForTimeout(500);
+        }
+      }
       for (const rr of pagesAndFrames(page)) {
         await clickNextOrConfirm(rr);
       }
