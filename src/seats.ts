@@ -255,7 +255,33 @@ const POST_QUEUE_BOOK_LABELS = [
   /예매\s*정보\s*확인\s*후\s*예매하기/,
 ];
 
-/** 대기열 통과 직후 뜨는 파란 '확인하고 예매하기' 등 — 클릭 후 좌석 단계로 진행 */
+async function findVisibleConfirmBookButton(
+  root: Page | Frame,
+): Promise<ReturnType<Page["locator"]> | null> {
+  for (const re of POST_QUEUE_BOOK_LABELS) {
+    const roleBtn = root.getByRole("button", { name: re }).first();
+    if (await roleBtn.isVisible().catch(() => false)) return roleBtn;
+
+    const fallback = root
+      .locator("button, a, [role='button']")
+      .filter({ hasText: re })
+      .first();
+    if (await fallback.isVisible().catch(() => false)) return fallback;
+  }
+  return null;
+}
+
+async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
+  for (const root of pagesAndFrames(page)) {
+    if (await findVisibleConfirmBookButton(root)) return true;
+  }
+  return false;
+}
+
+/**
+ * 대기열 통과 후 /onestop/seat 에서 뜨는 예매 안내(시야방해) 모달의
+ * 파란 '확인하고 예매하기' 클릭 → 좌석 등급 선택으로 진행.
+ */
 export async function clickConfirmAndBookAfterQueue(
   page: Page,
   timeoutMs = 180000,
@@ -271,83 +297,38 @@ export async function clickConfirmAndBookAfterQueue(
         continue;
       }
 
-      for (const re of POST_QUEUE_BOOK_LABELS) {
-        const roleBtn = root.getByRole("button", { name: re }).first();
-        if (await roleBtn.isVisible().catch(() => false)) {
-          log.info("대기열 이후 '확인하고 예매하기' 클릭");
-          await roleBtn.click({ timeout: 8000 }).catch(() => null);
-          clicked = true;
-          await page.waitForTimeout(1200);
-          break;
-        }
-
-        const fallback = root
-          .locator("button, a, [role='button']")
-          .filter({ hasText: re })
-          .first();
-        if (await fallback.isVisible().catch(() => false)) {
-          log.info("대기열 이후 예매 확인 버튼 클릭 (fallback)");
-          await fallback.click({ timeout: 8000 }).catch(() => null);
-          clicked = true;
-          await page.waitForTimeout(1200);
-          break;
-        }
+      const btn = await findVisibleConfirmBookButton(root);
+      if (btn) {
+        log.info("예매 안내 모달 — '확인하고 예매하기' 클릭");
+        await btn.click({ timeout: 8000 }).catch(() => null);
+        clicked = true;
+        await page.waitForTimeout(1200);
+        break;
       }
     }
 
-    const stillConfirm = await pagesAndFrames(page).reduce(
-      async (accP, root) => {
-        if (await accP) return true;
-        for (const re of POST_QUEUE_BOOK_LABELS) {
-          const n = await root
-            .locator("button, a, [role='button']")
-            .filter({ hasText: re })
-            .count()
-            .catch(() => 0);
-          if (n > 0) {
-            const vis = await root
-              .locator("button, a, [role='button']")
-              .filter({ hasText: re })
-              .first()
-              .isVisible()
-              .catch(() => false);
-            if (vis) return true;
-          }
-        }
-        return false;
-      },
-      Promise.resolve(false),
-    );
-
+    const stillConfirm = await isConfirmBookModalVisible(page);
     if (clicked && !stillConfirm) {
-      log.ok("예매 확인 단계 통과");
+      log.ok("예매 안내 확인 완료 — 좌석 선택 진행");
       return true;
     }
 
-    const seatReady = await waitForSeatUi(page, 800).catch(() => null);
-    if (seatReady && !stillConfirm) {
-      if (clicked) log.ok("예매 확인 후 좌석 화면 진입");
-      return clicked || true;
-    }
-
-    if (!stillConfirm && !clicked) {
-      const url = page.url();
-      if (
-        /onestop\/seat/i.test(url) &&
-        /등급선택|좌석선택|잔여석/.test(
-          await page.locator("body").innerText().catch(() => ""),
-        )
-      ) {
+    // 모달 없이 이미 좌석 UI만 있으면 통과
+    if (!stillConfirm) {
+      const seatReady = await waitForSeatUi(page, 1500).catch(() => null);
+      if (seatReady) {
+        if (clicked) log.ok("예매 안내 확인 후 좌석 화면 진입");
         return true;
       }
     }
 
-    if (stillConfirm) clicked = false;
     await page.waitForTimeout(800);
   }
 
   if (clicked) return true;
-  log.warn("대기열 이후 '확인하고 예매하기' 버튼을 찾지 못했습니다 — 수동 클릭 필요할 수 있음");
+  log.warn(
+    "'확인하고 예매하기' 버튼을 찾지 못했습니다 — 수동 클릭이 필요할 수 있음",
+  );
   return false;
 }
 
@@ -430,6 +411,11 @@ export async function waitForSeatUi(
         continue;
       }
     }
+    // 예매 안내 모달(확인하고 예매하기)이 떠 있으면 아직 좌석 선택 단계가 아님
+    if (await isConfirmBookModalVisible(page)) {
+      await page.waitForTimeout(800);
+      continue;
+    }
     for (const root of pagesAndFrames(page)) {
       const has = await root
         .evaluate(() => {
@@ -440,8 +426,10 @@ export async function waitForSeatUi(
           if (/오류가 발생했습니다/.test(t)) return false;
           // 실제 좌석/등급 선택 화면 신호
           return (
-            (/등급선택|좌석선택|잔여석|원하시는 좌석|좌석을 선택/.test(t) ||
-              /내야|외야|테이블석|응원/.test(t)) &&
+            (/등급선택|좌석선택|잔여석|원하시는 좌석|좌석을 선택|관람 구역/.test(
+              t,
+            ) ||
+              /내야|외야|테이블석|응원|블루석|레드석|네이비/.test(t)) &&
             document.querySelectorAll(
               "svg rect, svg circle, [class*='seat' i], [class*='Seat'], [data-seat], button, li",
             ).length > 5
@@ -455,8 +443,18 @@ export async function waitForSeatUi(
   return null;
 }
 
-/** 예매 안내/시야방해 모달 닫기 */
+/** 예매 안내/시야방해 모달 닫기 ('확인하고 예매하기' 포함) */
 export async function dismissBookingNotices(page: Page): Promise<void> {
+  // 실측: 모달 CTA가 '확인'이 아니라 '확인하고 예매하기'
+  for (const root of pagesAndFrames(page)) {
+    const confirmBook = await findVisibleConfirmBookButton(root);
+    if (confirmBook) {
+      log.info("예매 안내 — '확인하고 예매하기' 클릭");
+      await confirmBook.click({ timeout: 5000 }).catch(() => null);
+      await page.waitForTimeout(800);
+    }
+  }
+
   for (const name of ["확인", "닫기", "동의", "다음에"]) {
     for (const root of pagesAndFrames(page)) {
       const btn = root.getByRole("button", { name: new RegExp(`^${name}$`) });
