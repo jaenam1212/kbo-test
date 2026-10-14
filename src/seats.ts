@@ -114,39 +114,45 @@ async function findConsecutiveSeats(
         if (!nodes.includes(h)) nodes.push(h);
       });
     }
-    // SVG path/rect with fill that looks selectable (작은 좌석 점만)
-    if (nodes.length === 0) {
-      document.querySelectorAll("svg rect, svg circle, svg path").forEach((el) => {
-        const cls = (el.getAttribute("class") || "").toLowerCase();
-        const fill = (el.getAttribute("fill") || "").toLowerCase();
-        const pointer = getComputedStyle(el).cursor;
-        const box = (el as HTMLElement).getBoundingClientRect();
-        if (box.width < 2 || box.height < 2 || box.width > 40 || box.height > 40) {
-          return;
-        }
-        if (
-          pointer === "pointer" ||
-          /(avail|empty|on|open|select)/.test(cls) ||
-          fill === "#ffffff" ||
-          fill === "#fff"
-        ) {
-          if (!/(sold|disable|close|selected|mine)/.test(cls)) {
-            const h = el as HTMLElement;
-            const label = (
-              h.getAttribute("aria-label") ||
-              h.getAttribute("title") ||
-              h.getAttribute("data-seat") ||
-              h.textContent ||
-              ""
-            )
-              .replace(/\s+/g, " ")
-              .trim();
-            if (noise.test(label)) return;
-            if (!nodes.includes(h)) nodes.push(h);
-          }
-        }
-      });
-    }
+    // Interpark onestop: svg circle 좌석 (항상 수집)
+    document.querySelectorAll("svg circle, svg rect.seat, svg circle.seat").forEach((el) => {
+      const cls = (el.getAttribute("class") || "").toLowerCase();
+      const fillRaw =
+        el.getAttribute("fill") || getComputedStyle(el).fill || "";
+      const fill = fillRaw.toLowerCase();
+      const pointer = getComputedStyle(el).cursor;
+      const box = (el as HTMLElement).getBoundingClientRect();
+      if (box.width < 3 || box.height < 3 || box.width > 28 || box.height > 28) {
+        return;
+      }
+      if (/(sold|disable|close|unavailable|block)/.test(cls)) return;
+      // 회색/매진 계열 제외
+      if (
+        /#([89a-f]{2})\1\1|rgb\(\s*(1\d\d|2\d\d)\s*,\s*\1\s*,\s*\1|gray|grey|none/.test(
+          fill,
+        )
+      ) {
+        return;
+      }
+      const colorful =
+        /#|rgb|hsl/.test(fill) &&
+        !/#([c-f])\1\1|#e|#d|#ccc|#ddd|#eee|rgb\(2[0-4]\d/.test(fill);
+      if (!(pointer === "pointer" || colorful || /(avail|empty|on|open|select)/.test(cls))) {
+        return;
+      }
+      const h = el as HTMLElement;
+      const label = (
+        h.getAttribute("aria-label") ||
+        h.getAttribute("title") ||
+        h.getAttribute("data-seat") ||
+        h.id ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      if (noise.test(label)) return;
+      if (!nodes.includes(h)) nodes.push(h);
+    });
 
     return nodes.slice(0, 800).map((el, index) => {
       const label =
@@ -232,11 +238,13 @@ async function findConsecutiveSeats(
   return best;
 }
 
+/** 좌석 요소 중심 좌표를 모아 Playwright mouse로 클릭 (SVG dispatchEvent 무반응 대비) */
 async function clickSeatIndexes(
+  page: Page,
   root: Page | Frame,
   indexes: number[],
 ): Promise<boolean> {
-  return root.evaluate((idxs) => {
+  const points = await root.evaluate((idxs) => {
     const noise =
       /선택 시간|등급|가격|예매|확인|마이페이지|관람 구역|입력완료|보안|문자|유의사항|닫기|취소|로그인|결제/i;
     const selectors = [
@@ -267,40 +275,62 @@ async function clickSeatIndexes(
         if (!nodes.includes(h)) nodes.push(h);
       });
     }
-    if (nodes.length === 0) {
-      document.querySelectorAll("svg rect, svg circle, svg path").forEach((el) => {
-        const cls = (el.getAttribute("class") || "").toLowerCase();
-        const pointer = getComputedStyle(el).cursor;
-        const box = (el as HTMLElement).getBoundingClientRect();
-        if (box.width < 2 || box.height < 2 || box.width > 40 || box.height > 40) {
-          return;
-        }
-        if (pointer === "pointer" || /(avail|empty|on|open|select)/.test(cls)) {
-          const h = el as HTMLElement;
-          const label = (
-            h.getAttribute("aria-label") ||
-            h.getAttribute("title") ||
-            h.textContent ||
-            ""
-          )
-            .replace(/\s+/g, " ")
-            .trim();
-          if (noise.test(label)) return;
-          if (!nodes.includes(h)) nodes.push(h);
-        }
-      });
-    }
-    let ok = true;
-    for (const i of idxs) {
-      const el = nodes[i];
-      if (!el) {
-        ok = false;
-        continue;
+    document.querySelectorAll("svg circle, svg rect.seat, svg circle.seat").forEach((el) => {
+      const cls = (el.getAttribute("class") || "").toLowerCase();
+      const fill = (
+        el.getAttribute("fill") ||
+        getComputedStyle(el).fill ||
+        ""
+      ).toLowerCase();
+      const pointer = getComputedStyle(el).cursor;
+      const box = (el as HTMLElement).getBoundingClientRect();
+      if (box.width < 3 || box.height < 3 || box.width > 28 || box.height > 28) {
+        return;
       }
-      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    }
-    return ok;
+      if (/(sold|disable|close|unavailable)/.test(cls)) return;
+      if (
+        /#([89a-f]{2})\1\1|gray|grey|none|#ccc|#ddd|#eee/.test(fill)
+      ) {
+        return;
+      }
+      const colorful = /#|rgb|hsl/.test(fill);
+      if (!(pointer === "pointer" || colorful)) return;
+      const h = el as HTMLElement;
+      if (!nodes.includes(h)) nodes.push(h);
+    });
+    return idxs.map((i) => {
+      const el = nodes[i];
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return {
+        x: b.x + b.width / 2,
+        y: b.y + b.height / 2,
+        label:
+          el.getAttribute("aria-label") ||
+          el.getAttribute("title") ||
+          el.id ||
+          `seat-${i}`,
+      };
+    });
   }, indexes);
+
+  let ok = true;
+  for (const p of points) {
+    if (!p) {
+      ok = false;
+      continue;
+    }
+    await page.mouse.click(p.x, p.y, { delay: 40 });
+    await page.waitForTimeout(200);
+  }
+  return ok && points.every(Boolean);
+}
+
+async function selectionConfirmed(page: Page): Promise<boolean> {
+  const t = await page.locator("body").innerText().catch(() => "");
+  // 사이드바에 선택 좌석이 잡히면 성공
+  if (/선택한 좌석이 없습니다/.test(t)) return false;
+  return /선택 좌석/.test(t);
 }
 
 async function clickNextOrConfirm(root: Page | Frame): Promise<boolean> {
@@ -769,9 +799,14 @@ export async function selectGoodConsecutiveSeats(
       if (!pair) continue;
       if (pair.labels.some(isNoiseSeatLabel)) continue;
       log.ok(`좌석 발견: ${pair.labels.join(" + ")}`);
-      const ok = await clickSeatIndexes(r, pair.indexes);
+      const ok = await clickSeatIndexes(page, r, pair.indexes);
       if (!ok) continue;
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(600);
+      if (!(await selectionConfirmed(page))) {
+        log.warn("클릭 후에도 좌석 미선택 — 다음 후보");
+        continue;
+      }
+      log.ok("좌석 선택 확인됨");
       for (const rr of pagesAndFrames(page)) {
         await clickNextOrConfirm(rr);
       }
@@ -780,14 +815,22 @@ export async function selectGoodConsecutiveSeats(
     }
   }
 
-  // 등급 클릭 없이도 좌석만 있는 경우
+  // 등급 클릭 없이도 좌석만 있는 경우 (뮤지컬 등 도면 직선택)
   for (const r of pagesAndFrames(page)) {
     const pair = await findConsecutiveSeats(r, config.seatCount);
     if (!pair) continue;
+    if (pair.labels.some(isNoiseSeatLabel)) continue;
     log.ok(`연석 발견(등급 생략): ${pair.labels.join(" + ")}`);
-    await clickSeatIndexes(r, pair.indexes);
-    await page.waitForTimeout(800);
+    const ok = await clickSeatIndexes(page, r, pair.indexes);
+    if (!ok) continue;
+    await page.waitForTimeout(600);
+    if (!(await selectionConfirmed(page))) {
+      log.warn("등급 생략 클릭 실패 — 다른 연석 시도");
+      continue;
+    }
+    log.ok("좌석 선택 확인됨");
     for (const rr of pagesAndFrames(page)) await clickNextOrConfirm(rr);
+    await page.waitForTimeout(1000);
     return pair.labels.map((label) => ({ label }));
   }
 
