@@ -376,20 +376,16 @@ export async function dismissBookingNotices(page: Page): Promise<void> {
 }
 
 /**
- * 보안문자(캡차) 입력. visionFn이 있으면 이미지→문자열로 읽고, 없으면 수동 대기.
- * 자동 OCR은 환경에 따라 실패할 수 있음.
+ * 보안문자: OCR 최대 2회 → 실패 시 수동(Take Control) 대기.
  */
 export async function solveCaptchaIfPresent(
   page: Page,
-  opts?: { text?: string; waitManualMs?: number },
+  opts?: { text?: string; waitManualMs?: number; ocrAttempts?: number },
 ): Promise<boolean> {
-  const body = await page.locator("body").innerText().catch(() => "");
-  const hasCaptcha =
-    /보안문자|자동입력|봇|captcha|Captcha/i.test(body) ||
-    (await page.locator("img[src*='captcha'], img[alt*='문자'], input[name*='captcha' i]").count()) >
-      0;
-  if (!hasCaptcha) return false;
+  const { pageHasCaptcha, solveCaptchaWithOcr } = await import("./captcha.js");
+  if (!(await pageHasCaptcha(page))) return false;
 
+  // 직접 문자열이 넘어오면 1회 입력만
   if (opts?.text) {
     const input = page
       .locator(
@@ -405,18 +401,25 @@ export async function solveCaptchaIfPresent(
         await submit.first().click();
       }
       await page.waitForTimeout(800);
-      return true;
+      return !(await pageHasCaptcha(page));
     }
   }
 
+  const attempts = opts?.ocrAttempts ?? 2;
+  log.info(`보안문자 감지 — OCR 최대 ${attempts}회 시도`);
+  const ocr = await solveCaptchaWithOcr(page, attempts);
+  if (ocr.ok) return true;
+
   log.warn(
-    "보안문자 감지 — Take Control로 입력하거나 text를 넘기세요. 대기 중...",
+    `OCR ${ocr.attempts}회 실패(${ocr.reason}) — Take Control로 직접 입력 대기`,
   );
-  const waitMs = opts?.waitManualMs ?? 120000;
+  const waitMs = opts?.waitManualMs ?? 90000;
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
-    const t = await page.locator("body").innerText().catch(() => "");
-    if (!/보안문자|자동입력 방지/.test(t)) return true;
+    if (!(await pageHasCaptcha(page))) {
+      log.ok("보안문자 수동 입력 확인");
+      return true;
+    }
     await page.waitForTimeout(1000);
   }
   return false;
