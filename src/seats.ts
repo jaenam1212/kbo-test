@@ -584,7 +584,7 @@ export async function waitOutQueue(
       loadingSince = Date.now();
       const order = t.match(/나의 대기순서\s*(\d+)/)?.[1];
       if (order) log.info(`대기열 순서: ${order}`);
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(800);
       continue;
     }
 
@@ -595,7 +595,7 @@ export async function waitOutQueue(
         await active.reload({ waitUntil: "domcontentloaded" }).catch(() => null);
         loadingSince = Date.now();
       }
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(400);
       continue;
     }
 
@@ -610,7 +610,7 @@ export async function waitOutQueue(
       return active;
     }
 
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(400);
   }
   throw new Error("대기열/로딩 타임아웃");
 }
@@ -835,10 +835,10 @@ export async function selectGoodConsecutiveSeats(
       log.warn(`등급 클릭 실패: ${clickName}`);
       continue;
     }
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(500);
     await solveCaptchaIfPresent(seatPage, {
       ocrAttempts: 2,
-      waitManualMs: 60000,
+      waitManualMs: 90000,
     });
 
     // 테이블석(N인) 패키지는 유닛 1개 = N명 → 1칸만 선택

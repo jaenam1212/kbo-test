@@ -109,7 +109,7 @@ export async function fetchPostseasonGoods(
       timeout: 45000,
     })
     .catch(() => null);
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(400);
 
   const html = await page.content();
   let goods = extractGoodsFromText(html);

@@ -101,7 +101,16 @@ async function clickBookForGoods(
   page: Page,
   g: SportsGoods,
   config: AppConfig,
+  opts: { preferGate?: boolean } = {},
 ): Promise<void> {
+  // 속도전: goodsCode 알면 게이트 URL 직행 (DOM 탐색보다 빠름)
+  if (opts.preferGate !== false && g.goodsCode && g.placeCode) {
+    const gate = nolTicketGateUrl(g);
+    log.info("게이트 직행:", gate);
+    await page.goto(gate, { waitUntil: "domcontentloaded", timeout: 30000 });
+    return;
+  }
+
   await ensureOnPostseason(page, config);
 
   const buttons = await listVisibleBookButtons(page);
@@ -113,7 +122,6 @@ async function clickBookForGoods(
   );
   if (idx < 0 && buttons.length === 1) idx = 0;
   if (idx < 0) {
-    // 날짜로 재시도
     idx = buttons.findIndex((b) =>
       (g.playDate || "").replaceAll("-", "").slice(4)
         ? b.label.includes(String(Number((g.playDate || "").split("-")[1]))) &&
@@ -125,14 +133,13 @@ async function clickBookForGoods(
   if (idx >= 0) {
     log.info(`NOL '예매하기' 클릭 (#${idx}) — ${buttons[idx]?.label}`);
     const btn = page.locator("button", { hasText: "예매하기" }).nth(idx);
-    await btn.click({ timeout: 10000 });
+    await btn.click({ timeout: 5000 });
     return;
   }
 
-  // DOM 매칭 실패 시 NOL 티켓 게이트로 직접 진입
   const gate = nolTicketGateUrl(g);
-  log.warn("예매 버튼을 못 찾아 NOL 티켓 게이트로 이동합니다.");
-  await page.goto(gate, { waitUntil: "domcontentloaded", timeout: 60000 });
+  log.warn("예매 버튼 없음 — 게이트 직행");
+  await page.goto(gate, { waitUntil: "domcontentloaded", timeout: 30000 });
 }
 
 export async function runBookFlow(
@@ -193,47 +200,47 @@ export async function runBookFlow(
   }
   if (!goods) throw new Error("예매할 기아 홈 상품이 없습니다.");
 
-  // 오픈 시각까지 정밀 대기
+  // 오픈 직전: 포스트시즌 워밍업 후 정밀 대기 → 게이트 직행
+  await ensureOnPostseason(page, config);
   if (goods.bookingOpenTime) {
     const openAt = new Date(goods.bookingOpenTime).getTime() - config.openEarlyMs;
     while (Date.now() < openAt) {
       const left = openAt - Date.now();
-      log.info(`오픈까지 ${Math.ceil(left / 1000)}초`);
-      await page.waitForTimeout(Math.min(1000, left));
+      if (left > 5000 && left % 10000 < 1000) {
+        log.info(`오픈까지 ${Math.ceil(left / 1000)}초 (게이트 직행 대기)`);
+      } else if (left <= 5000) {
+        log.info(`오픈까지 ${Math.ceil(left / 1000)}초`);
+      }
+      await page.waitForTimeout(Math.min(left > 3000 ? 500 : 50, left));
     }
   }
 
   let attempts = 0;
   while (attempts < config.maxSaleAttempts) {
     attempts += 1;
-    log.info(`예매 시도 ${attempts}/${config.maxSaleAttempts}`);
+    log.info(`예매 시도 ${attempts}/${config.maxSaleAttempts} (게이트 직행·${config.seatCount}연석)`);
     try {
-      await ensureOnPostseason(page, config);
-      await clickBookForGoods(page, goods, config);
+      await clickBookForGoods(page, goods, config, { preferGate: true });
 
-      // 로그인 리다이렉트 처리
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(400);
       if (page.url().includes(NOL_LOGIN_HOST)) {
         await waitForLogin(page);
-        await ensureOnPostseason(page, config);
-        await clickBookForGoods(page, goods, config);
+        await clickBookForGoods(page, goods, config, { preferGate: true });
       }
 
-      // 새 탭으로 게이트가 열릴 수 있음
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(300);
       const pages = context.pages();
       let active =
+        pages.find((p) => /onestop\/seat/i.test(p.url())) ||
+        pages.find((p) => /\/waiting/i.test(p.url())) ||
         pages.find((p) =>
-          /gates\/ticket|gates\/partner|waiting|Seat|Book|tickets\./i.test(
-            p.url(),
-          ),
+          /gates\/ticket|gates\/partner|Seat|Book|tickets\./i.test(p.url()),
         ) ||
         pages[pages.length - 1] ||
         page;
 
-      // 대기열 통과 대기 (새로고침 금지)
       active = await waitOutQueue(active);
-      log.ok("대기열 통과 — 예매 확인(확인하고 예매하기) 처리");
+      log.ok("대기열 통과 — 확인하고 예매하기");
 
       await clickConfirmAndBookAfterQueue(active);
       active = await waitOutQueue(active);
@@ -249,7 +256,7 @@ export async function runBookFlow(
       return;
     } catch (e) {
       log.warn(String(e));
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(200);
     }
   }
   throw new Error("예매 시도 횟수를 초과했습니다.");

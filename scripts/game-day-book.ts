@@ -56,16 +56,22 @@ async function sleepUntil(target: Date, label: string) {
 }
 
 async function main() {
-  const prepAt = process.env.PREP_AT || "13:40";
+  const prepAt = process.env.PREP_AT || "13:30";
   const targetOpen = process.env.TARGET_OPEN || "14:00";
+  /** 1차전 고정 (속도전: 탐색 생략) */
+  const pinGoodsCode = process.env.GOODS_CODE || "26014417";
   const config = loadConfig();
   config.headless = process.env.HEADLESS === "1";
   config.seatCount = Number(process.env.SEAT_COUNT || config.seatCount || 3);
+  config.pollIntervalMs = Number(process.env.POLL_MS || config.pollIntervalMs || 500);
+  config.openEarlyMs = Number(process.env.OPEN_EARLY_MS || config.openEarlyMs || 12000);
 
-  log.info("=== 경기일 예매 준비 ===");
+  log.info("=== 경기일 예매 준비 (속도전) ===");
   log.info(`매수: ${config.seatCount}연석 | 테이블석(3인) 우선`);
-  log.info(`준비 시작: ${prepAt} KST | 1차전 오픈 목표: ${targetOpen} KST`);
-  log.info(`지금(KST): ${kstNow().toLocaleString("ko-KR")}`);
+  log.info(
+    `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | 조기진입 ${config.openEarlyMs}ms | 게이트직행`,
+  );
+  log.info(`핀 goodsCode=${pinGoodsCode} | 지금(KST): ${kstNow().toLocaleString("ko-KR")}`);
 
   const prepTime = todayKstAt(prepAt);
   if (Date.now() < prepTime.getTime()) {
@@ -101,35 +107,46 @@ async function main() {
   }
   log.ok("로그인·본인인증 OK — 오픈 감시 시작");
 
-  // 워밍업: 상품 목록 미리 확인
+  // 워밍업: 상품 목록 + 1차전 핀
   let goods = await fetchPostseasonGoods(page, config.postseasonUrl);
   for (const g of goods) log.info(" -", formatGoods(g));
-  let best = pickBestGoods(goods, config);
-  if (best) {
-    log.ok("1순위 후보:", formatGoods(best));
-    if (best.bookingOpenTime) {
-      const openAt = new Date(best.bookingOpenTime).getTime() - config.openEarlyMs;
-      if (Date.now() < openAt) {
-        await sleepUntil(new Date(openAt), `오픈(조기 ${config.openEarlyMs}ms)`);
-      }
-    }
+  let best =
+    goods.find((g) => g.goodsCode === pinGoodsCode) ||
+    pickBestGoods(goods, config);
+  if (!best) {
+    log.warn("기아 홈 후보 없음 — 폴링");
   } else {
-    log.warn("기아 홈 후보 아직 없음 — 폴링 계속");
+    log.ok("타깃:", formatGoods(best));
   }
 
+  // 오픈 60초 전에도 페이지 워밍업 유지
   for (;;) {
-    goods = await fetchPostseasonGoods(page, config.postseasonUrl);
-    best = pickBestGoods(goods, config);
-    if (best) {
-      log.info("후보:", formatGoods(best));
-      if (isBookingOpen(best, config.openEarlyMs)) {
-        log.ok(
-          `오픈 — ${config.seatCount}연석(테이블 우선) 예매 시작 → 결제 직전 정지`,
-        );
-        await runBookFlow(context, page, config, best);
-        log.ok("결제만 직접 하세요. 브라우저 유지.");
-        await new Promise(() => {});
-        return;
+    if (!best || Date.now() % 15000 < config.pollIntervalMs) {
+      goods = await fetchPostseasonGoods(page, config.postseasonUrl);
+      best =
+        goods.find((g) => g.goodsCode === pinGoodsCode) ||
+        pickBestGoods(goods, config) ||
+        best;
+      if (best) log.info("타깃 유지:", formatGoods(best));
+    }
+
+    if (best && isBookingOpen(best, config.openEarlyMs)) {
+      log.ok(
+        `오픈 — 게이트직행·${config.seatCount}연석 돌입 → 결제 직전 정지`,
+      );
+      await runBookFlow(context, page, config, best);
+      log.ok("결제만 직접 하세요. 브라우저 유지.");
+      await new Promise(() => {});
+      return;
+    }
+
+    if (best?.bookingOpenTime) {
+      const left =
+        new Date(best.bookingOpenTime).getTime() -
+        config.openEarlyMs -
+        Date.now();
+      if (left > 0 && left < 120000) {
+        log.info(`돌입까지 ${Math.ceil(left / 1000)}초`);
       }
     }
     await page.waitForTimeout(config.pollIntervalMs);

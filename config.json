@@ -1,6 +1,6 @@
 {
   "postseasonUrl": "https://nol.yanolja.com/ticket/genre/sports/postseason",
-  "pollIntervalMs": 1000,
+  "pollIntervalMs": 500,
   "seatCount": 3,
   "requireConsecutive": true,
   "headless": false,
@@ -39,6 +39,6 @@
   ],
   "avoidGrades": ["외야", "스카이박스", "스윗박스", "휠체어", "시야방해", "익사이팅"],
   "preferHomeSide": "3루",
-  "maxSaleAttempts": 60,
-  "openEarlyMs": 5000
+  "maxSaleAttempts": 80,
+  "openEarlyMs": 12000
 }
