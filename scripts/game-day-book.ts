@@ -69,9 +69,20 @@ function pickTicketPage(
 }
 
 async function main() {
+  // 내 PC 실행 편의 (npm run game-day:local / LOCAL=1)
+  if (
+    process.env.LOCAL === "1" ||
+    process.env.LOCAL === "true" ||
+    process.env.npm_lifecycle_event === "game-day:local"
+  ) {
+    process.env.LOCAL = "1";
+    process.env.CHANNEL = process.env.CHANNEL || "chrome";
+    if (process.env.HEADLESS == null) process.env.HEADLESS = "0";
+  }
+
   const prepAt = process.env.PREP_AT || "13:30";
-  const targetOpen = process.env.TARGET_OPEN || "15:00";
-  const pinGoodsCode = process.env.GOODS_CODE || "26014419";
+  const targetOpen = process.env.TARGET_OPEN || "16:00";
+  const pinGoodsCode = process.env.GOODS_CODE || "26014425";
   const config = loadConfig();
   config.headless = process.env.HEADLESS === "1";
   config.seatCount = Number(process.env.SEAT_COUNT || config.seatCount || 3);

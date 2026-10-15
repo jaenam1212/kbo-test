@@ -9,7 +9,9 @@
     "watch": "tsx src/index.ts watch",
     "book": "tsx src/index.ts book",
     "dry-run": "tsx src/index.ts watch --once",
+    "login": "tsx scripts/local-login.ts",
     "game-day": "tsx scripts/game-day-book.ts",
+    "game-day:local": "tsx scripts/game-day-book.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
