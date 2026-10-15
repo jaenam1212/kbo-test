@@ -16,9 +16,10 @@ export function scoreGradeLabel(label: string, config: AppConfig): number {
     }
   });
 
-  // 테이블석 최우선 (2인 ≈ seatCount 2)
+  // 테이블석 최우선 — 중앙테이블·N인 매칭
   if (/테이블/.test(t)) {
     score += 80;
+    if (/중앙\s*테이블|중앙테이블/.test(t)) score += 55;
     const pax = Number(t.match(/\((\d+)\s*인\)/)?.[1] || 0);
     if (pax > 0) {
       if (pax === config.seatCount) score += 50;

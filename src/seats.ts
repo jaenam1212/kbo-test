@@ -785,7 +785,7 @@ export async function selectGoodConsecutiveSeats(
       graded.push({ label: c.label, s, remaining: c.remaining });
     }
   }
-  // 잔여>0 테이블석이 있으면 그것만 우선
+  // 잔여>0 테이블/중앙테이블이 있으면 그것만 우선
   const tableAvail = graded.filter(
     (g) => /테이블/.test(g.label) && (g.remaining == null || g.remaining > 0),
   );
@@ -793,15 +793,19 @@ export async function selectGoodConsecutiveSeats(
     ? graded.filter((g) => (g.remaining ?? 0) > 0)
     : graded.filter((g) => g.remaining == null || g.remaining > 0);
   pool.sort((a, b) => {
-    const aTable = /테이블/.test(a.label) ? 1 : 0;
-    const bTable = /테이블/.test(b.label) ? 1 : 0;
-    if (aTable !== bTable) return bTable - aTable;
+    const rank = (label: string) => {
+      if (/중앙\s*테이블|중앙테이블/.test(label)) return 3;
+      if (/테이블/.test(label)) return 2;
+      return 0;
+    };
+    const d = rank(b.label) - rank(a.label);
+    if (d !== 0) return d;
     return b.s - a.s;
   });
 
   const gradeLabels = pool.map((g) => g.label);
   log.info(
-    "등급 후보(테이블·잔여 우선):",
+    "등급 후보(중앙테이블·테이블·잔여 우선):",
     pool
       .slice(0, 10)
       .map((g) => `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`)
