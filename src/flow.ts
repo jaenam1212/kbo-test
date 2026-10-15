@@ -214,17 +214,26 @@ export async function runBookFlow(
     }
   }
 
+  const isAbnormalAccess = async (p: Page): Promise<boolean> => {
+    const text = await p.locator("body").innerText().catch(() => "");
+    return /정상적인\s*접근이\s*아닙니다|비정상\s*접근|잘못된\s*접근|비정상적인\s*경로/.test(
+      text,
+    );
+  };
+
   let attempts = 0;
   while (attempts < config.maxSaleAttempts) {
     attempts += 1;
     log.info(`예매 시도 ${attempts}/${config.maxSaleAttempts} (게이트 직행·${config.seatCount}연석)`);
     try {
-      await clickBookForGoods(page, goods, config, { preferGate: true });
+      // 2회차부터는 게이트 URL 재돌입 금지 — "정상적인 접근이 아닙니다" 유발
+      const useGate = attempts === 1;
+      await clickBookForGoods(page, goods, config, { preferGate: useGate });
 
       await page.waitForTimeout(400);
       if (page.url().includes(NOL_LOGIN_HOST)) {
         await waitForLogin(page);
-        await clickBookForGoods(page, goods, config, { preferGate: true });
+        await clickBookForGoods(page, goods, config, { preferGate: false });
       }
 
       await page.waitForTimeout(300);
@@ -238,7 +247,20 @@ export async function runBookFlow(
         pages[pages.length - 1] ||
         page;
 
+      if (await isAbnormalAccess(active)) {
+        log.error(
+          "인터파크 '정상적인 접근이 아닙니다' 감지 — 재시도 중단. 폰/다른 PC 같은 계정 예매창 닫고, Take Control로 NOL→예매하기 한 번만 진입하세요.",
+        );
+        return;
+      }
+
       active = await waitOutQueue(active);
+      if (await isAbnormalAccess(active)) {
+        log.error(
+          "인터파크 '정상적인 접근이 아닙니다' 감지 — 재시도 중단. 같은 계정 동시접속/게이트 직행 반복이 원인일 수 있습니다.",
+        );
+        return;
+      }
       log.ok("대기열 통과 — 확인하고 예매하기");
 
       await clickConfirmAndBookAfterQueue(active);
@@ -254,8 +276,14 @@ export async function runBookFlow(
       log.ok("끝. 결제만 직접 하면 됩니다. (브라우저 유지)");
       return;
     } catch (e) {
-      log.warn(String(e));
-      await page.waitForTimeout(200);
+      const msg = String(e);
+      log.warn(msg);
+      if (/정상적인\s*접근|비정상\s*접근|잘못된\s*접근/.test(msg)) {
+        log.error("비정상 접근 — 추가 게이트 재진입 중단");
+        return;
+      }
+      // 좌석 실패 후 바로 게이트 재돌입하지 않도록 잠시 대기
+      await page.waitForTimeout(1500);
     }
   }
   throw new Error("예매 시도 횟수를 초과했습니다.");
