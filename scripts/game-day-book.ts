@@ -153,7 +153,10 @@ async function main() {
   }
 
   let active = pickTicketPage(context, page);
-  let skew = await measureServerSkewMs(active);
+  let skew = await measureServerSkewMs("https://nol.yanolja.com/");
+  // interpark Date도 시도해 평균
+  const skew2 = await measureServerSkewMs("https://tickets.interpark.com/");
+  if (skew2 !== 0) skew = Math.round((skew + skew2) / 2);
   log.ok(
     `서버오픈 ${new Date(openServerMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} | fire early=${config.openEarlyMs}ms | skew=${skew}ms`,
   );
@@ -183,9 +186,9 @@ async function main() {
       }
     }
 
-    // 오픈 90초 전  skew 재측정 1회
+    // 오픈 90초 전 skew 재측정 1회
     if (!remMeasured && leftLocal < 90000) {
-      skew = await measureServerSkewMs(active);
+      skew = await measureServerSkewMs("https://nol.yanolja.com/");
       remMeasured = true;
       log.ok(`skew 재측정=${skew}ms`);
     }
@@ -193,10 +196,8 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1000));
   }
 
-  // 90초~2분 구간에서 빠져나온 경우 재측정
   if (!remMeasured) {
-    active = pickTicketPage(context, page);
-    skew = await measureServerSkewMs(active);
+    skew = await measureServerSkewMs("https://nol.yanolja.com/");
     remMeasured = true;
     log.ok(`skew 최종=${skew}ms`);
   }
