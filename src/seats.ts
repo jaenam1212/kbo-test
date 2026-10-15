@@ -586,8 +586,16 @@ export async function waitOutQueue(
 
     if (await isWaitingRoom(active)) {
       loadingSince = Date.now();
-      const order = t.match(/나의 대기순서\s*(\d+)/)?.[1];
-      if (order) log.info(`대기열 순서: ${order}`);
+      const orderRaw = t.match(/나의 대기순서\s*([\d,]+)/)?.[1];
+      const totalRaw = t.match(/현재 대기인원\s*([\d,]+)/)?.[1];
+      if (orderRaw) {
+        const order = orderRaw.replace(/,/g, "");
+        const total = totalRaw ? totalRaw.replace(/,/g, "") : "";
+        log.info(
+          `대기열 순서: ${Number(order).toLocaleString("ko-KR")}` +
+            (total ? ` / 전체 ${Number(total).toLocaleString("ko-KR")}` : ""),
+        );
+      }
       await page.waitForTimeout(800);
       continue;
     }

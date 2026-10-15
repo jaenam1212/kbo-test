@@ -115,21 +115,34 @@ async function clickBookForGoods(
   await ensureOnPostseason(page, config);
 
   const buttons = await listVisibleBookButtons(page);
-  const keys = [g.goodsName, g.playDate || "", "광주", "기아", "챔피언스", "준플"].filter(
-    Boolean,
-  );
-  let idx = buttons.findIndex((b) =>
-    keys.some((k) => k && b.label.includes(k)),
-  );
-  if (idx < 0 && buttons.length === 1) idx = 0;
-  if (idx < 0) {
-    idx = buttons.findIndex((b) =>
-      (g.playDate || "").replaceAll("-", "").slice(4)
-        ? b.label.includes(String(Number((g.playDate || "").split("-")[1]))) &&
-          b.label.includes(String(Number((g.playDate || "").split("-")[2])))
-        : false,
+  const round = g.goodsName.match(/(\d+)\s*차전/)?.[1];
+  const [, mo, day] = (g.playDate || "").split("-");
+  let idx = -1;
+  // 1) N차전 + 월/일 동시 매칭
+  if (round && mo && day) {
+    idx = buttons.findIndex(
+      (b) =>
+        b.label.includes(`${round}차전`) &&
+        (b.label.includes(`${Number(mo)}월`) ||
+          b.label.includes(`${mo}.`)) &&
+        (b.label.includes(`${Number(day)}일`) ||
+          b.label.includes(`.${Number(day)}`) ||
+          b.label.includes(`${day}`)),
     );
   }
+  // 2) N차전만
+  if (idx < 0 && round) {
+    idx = buttons.findIndex((b) => b.label.includes(`${round}차전`));
+  }
+  // 3) 월/일
+  if (idx < 0 && mo && day) {
+    idx = buttons.findIndex(
+      (b) =>
+        b.label.includes(`${Number(mo)}월`) &&
+        b.label.includes(`${Number(day)}일`),
+    );
+  }
+  if (idx < 0 && buttons.length === 1) idx = 0;
 
   if (idx >= 0) {
     log.info(`NOL '예매하기' 클릭 (#${idx}) — ${buttons[idx]?.label}`);
@@ -226,9 +239,9 @@ export async function runBookFlow(
     attempts += 1;
     log.info(`예매 시도 ${attempts}/${config.maxSaleAttempts} (게이트 직행·${config.seatCount}연석)`);
     try {
-      // 2회차부터는 게이트 URL 재돌입 금지 — "정상적인 접근이 아닙니다" 유발
-      const useGate = attempts === 1;
-      await clickBookForGoods(page, goods, config, { preferGate: useGate });
+      // 1회차: NOL '예매하기' 경로 우선 (게이트 URL 직행은 비정상접근 유발)
+      // 2회차+: 재돌입 자체를 최소화 — NOL 버튼만
+      await clickBookForGoods(page, goods, config, { preferGate: false });
 
       await page.waitForTimeout(400);
       if (page.url().includes(NOL_LOGIN_HOST)) {
