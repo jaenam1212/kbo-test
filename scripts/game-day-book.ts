@@ -1,6 +1,6 @@
 /**
  * 경기일 예매: 오픈 전 NOL 예매하기 → 타이머 화면 유지 →
- * UI 타이머 무시하고 서버시각(bookingOpenTime + Date 헤더 skew) 정각에 스램클릭.
+ * UI 타이머 무시하고 서버시각(bookingOpenTime + Date 헤더 skew) 정각에 예매 1회 클릭.
  */
 import { loadConfig } from "../src/config.js";
 import { launchContext } from "../src/browser.js";
@@ -12,7 +12,7 @@ import {
   pickBestGoods,
 } from "../src/goods.js";
 import { clickBookForGoods, runBookFlow } from "../src/flow.js";
-import { slamBookButtonsNow } from "../src/seats.js";
+import { clickBookButtonOnceAtOpen } from "../src/seats.js";
 import { measureServerSkewMs, waitUntilServerMs } from "../src/time.js";
 import { log } from "../src/logger.js";
 
@@ -81,7 +81,7 @@ async function main() {
   // UI 타이머 무시 — 서버 오픈 시각에 맞춤 (조기는 기본 0)
   config.openEarlyMs = Number(process.env.OPEN_EARLY_MS ?? "0");
 
-  log.info("=== 경기일 예매 준비 (서버타임 정각 스램) ===");
+  log.info("=== 경기일 예매 준비 (서버타임 정각 1클릭) ===");
   log.info(
     `매수: ${config.seatCount}연석 | ①중앙테이블≈3루테이블 → ②테이블3연석 → ③아무3연석`,
   );
@@ -211,13 +211,10 @@ async function main() {
 
   active = pickTicketPage(context, page);
   log.ok(
-    `정각 스램 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — 버튼 연타`,
+    `정각 1클릭 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — 연타 없음`,
   );
-  const hit = await slamBookButtonsNow(active, 80);
-  if (!hit) {
-    log.warn("미히트 — 셀렉터만 재연타 (텍스트 판단 없음)");
-    await slamBookButtonsNow(pickTicketPage(context, page), 40);
-  }
+  await clickBookButtonOnceAtOpen(active, 10000);
+  // 클릭 성공/실패와 관계없이 재클릭하지 않음. 이후는 대기열/좌석만 진행.
 
   await runBookFlow(context, pickTicketPage(context, page), config, best, {
     fromTimer: true,

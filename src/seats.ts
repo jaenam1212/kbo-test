@@ -460,15 +460,16 @@ async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
 }
 
 /**
- * 정각 스램클릭 — body 텍스트 인식 없이 버튼 셀렉터만 연타.
- * UI 타이머를 읽고 판단하면 지연되므로 시계 기준으로 호출할 것.
+ * 정각 클릭 1회 — 연타 금지.
+ * 여러 번 누르면 마지막 요청만 남거나 대기열이 꼬일 수 있음.
+ * 서버시각 도달 후 버튼이 가능해질 때까지 짧게 폴링 → 성공 시 즉시 중단.
  */
-export async function slamBookButtonsNow(
+export async function clickBookButtonOnceAtOpen(
   page: Page,
-  rounds = 40,
+  waitMs = 8000,
 ): Promise<boolean> {
-  let hit = false;
-  for (let r = 0; r < rounds; r++) {
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
     for (const root of pagesAndFrames(page)) {
       const locs = [
         root.getByRole("button", { name: /확인하고\s*예매하기/ }),
@@ -479,29 +480,39 @@ export async function slamBookButtonsNow(
         root
           .locator("button, a, [role='button']")
           .filter({ hasText: /^예매하기$/ }),
-        root.getByRole("button", { name: /예매하기/ }),
       ];
       for (const loc of locs) {
         const n = await loc.count().catch(() => 0);
-        for (let i = 0; i < Math.min(n, 4); i++) {
+        for (let i = 0; i < Math.min(n, 3); i++) {
           const b = loc.nth(i);
-          // 보이는지 길게 기다리지 않음 — 실패하면 다음
-          const clicked = await b
-            .click({ timeout: 120, force: true, noWaitAfter: true })
+          const visible = await b.isVisible().catch(() => false);
+          if (!visible) continue;
+          const enabled = await b.isEnabled().catch(() => true);
+          if (!enabled) continue;
+          // force 없이 1회만 — 성공하면 절대 재클릭 안 함
+          const ok = await b
+            .click({ timeout: 400, noWaitAfter: true })
             .then(() => true)
             .catch(() => false);
-          if (clicked) {
-            hit = true;
-            log.ok(`정각 스램클릭 hit round=${r} idx=${i}`);
+          if (ok) {
+            log.ok("정각 예매 클릭 1회 완료 — 추가 클릭 없음");
             return true;
           }
         }
       }
     }
-    // 버튼이 아직 안 떠도 짧게만 쉼
-    await new Promise((res) => setTimeout(res, 25));
+    await new Promise((res) => setTimeout(res, 40));
   }
-  return hit;
+  log.warn("정각 클릭 대상 버튼을 못 찾음 (1회 정책 유지, 연타 안 함)");
+  return false;
+}
+
+/** @deprecated 이름만 호환 — 내부는 1회 클릭 */
+export async function slamBookButtonsNow(
+  page: Page,
+  _rounds = 1,
+): Promise<boolean> {
+  return clickBookButtonOnceAtOpen(page);
 }
 
 /**
