@@ -6,3 +6,5 @@ dist/
 .DS_Store
 *.traineddata
 /tmp/nol-captcha/
+kbo-kia-nol-ticket-local.zip
+kbo-test.bundle
