@@ -460,6 +460,51 @@ async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
 }
 
 /**
+ * 정각 스램클릭 — body 텍스트 인식 없이 버튼 셀렉터만 연타.
+ * UI 타이머를 읽고 판단하면 지연되므로 시계 기준으로 호출할 것.
+ */
+export async function slamBookButtonsNow(
+  page: Page,
+  rounds = 40,
+): Promise<boolean> {
+  let hit = false;
+  for (let r = 0; r < rounds; r++) {
+    for (const root of pagesAndFrames(page)) {
+      const locs = [
+        root.getByRole("button", { name: /확인하고\s*예매하기/ }),
+        root.locator("button, a, [role='button']").filter({
+          hasText: /확인하고\s*예매하기/,
+        }),
+        root.getByRole("button", { name: /^예매하기$/ }),
+        root
+          .locator("button, a, [role='button']")
+          .filter({ hasText: /^예매하기$/ }),
+        root.getByRole("button", { name: /예매하기/ }),
+      ];
+      for (const loc of locs) {
+        const n = await loc.count().catch(() => 0);
+        for (let i = 0; i < Math.min(n, 4); i++) {
+          const b = loc.nth(i);
+          // 보이는지 길게 기다리지 않음 — 실패하면 다음
+          const clicked = await b
+            .click({ timeout: 120, force: true, noWaitAfter: true })
+            .then(() => true)
+            .catch(() => false);
+          if (clicked) {
+            hit = true;
+            log.ok(`정각 스램클릭 hit round=${r} idx=${i}`);
+            return true;
+          }
+        }
+      }
+    }
+    // 버튼이 아직 안 떠도 짧게만 쉼
+    await new Promise((res) => setTimeout(res, 25));
+  }
+  return hit;
+}
+
+/**
  * 대기열/게이트 이후:
  * 1) '예매 준비가 완료됐어요' → 파란 예매하기
  * 2) 예매 안내(시야방해) 모달 → 확인하고 예매하기
