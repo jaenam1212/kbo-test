@@ -211,10 +211,9 @@ async function main() {
 
   active = pickTicketPage(context, page);
   log.ok(
-    `정각 1클릭 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — 연타 없음`,
+    `정각 클릭 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — API 없으면 1회만 재시도, pending이면 재클릭 금지`,
   );
-  await clickBookButtonOnceAtOpen(active, 10000);
-  // 클릭 성공/실패와 관계없이 재클릭하지 않음. 이후는 대기열/좌석만 진행.
+  await clickBookButtonOnceAtOpen(active, 15000);
 
   await runBookFlow(context, pickTicketPage(context, page), config, best, {
     fromTimer: true,

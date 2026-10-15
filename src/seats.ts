@@ -6,6 +6,12 @@ import {
   pickBestGradeIndex,
   scoreGradeLabel,
 } from "./prefer.js";
+import {
+  logNet,
+  pageLooksInFlight,
+  requestGone,
+  watchBookingNetwork,
+} from "./netwatch.js";
 import { log } from "./logger.js";
 
 function pagesAndFrames(page: Page): (Page | Frame)[] {
@@ -459,55 +465,132 @@ async function isConfirmBookModalVisible(page: Page): Promise<boolean> {
   return false;
 }
 
+async function findOpenBookButton(
+  page: Page,
+): Promise<ReturnType<Page["locator"]> | null> {
+  for (const root of pagesAndFrames(page)) {
+    const locs = [
+      root.getByRole("button", { name: /확인하고\s*예매하기/ }),
+      root.locator("button, a, [role='button']").filter({
+        hasText: /확인하고\s*예매하기/,
+      }),
+      root.getByRole("button", { name: /^예매하기$/ }),
+      root
+        .locator("button, a, [role='button']")
+        .filter({ hasText: /^예매하기$/ }),
+    ];
+    for (const loc of locs) {
+      const n = await loc.count().catch(() => 0);
+      for (let i = 0; i < Math.min(n, 3); i++) {
+        const b = loc.nth(i);
+        const visible = await b.isVisible().catch(() => false);
+        if (!visible) continue;
+        const enabled = await b.isEnabled().catch(() => true);
+        if (!enabled) continue;
+        return b;
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * 정각 클릭 1회 — 연타 금지.
- * 여러 번 누르면 마지막 요청만 남거나 대기열이 꼬일 수 있음.
- * 서버시각 도달 후 버튼이 가능해질 때까지 짧게 폴링 → 성공 시 즉시 중단.
+ * 정각 클릭 — 기본 1회.
+ * API pending/성공·대기열 진입이면 재클릭 금지.
+ * 버튼 미활성 등으로 요청이 아예 안 나갔을 때만 최대 1회 추가.
  */
 export async function clickBookButtonOnceAtOpen(
   page: Page,
-  waitMs = 8000,
+  waitMs = 12000,
 ): Promise<boolean> {
+  const net = watchBookingNetwork(page.context());
   const deadline = Date.now() + waitMs;
-  while (Date.now() < deadline) {
-    for (const root of pagesAndFrames(page)) {
-      const locs = [
-        root.getByRole("button", { name: /확인하고\s*예매하기/ }),
-        root.locator("button, a, [role='button']").filter({
-          hasText: /확인하고\s*예매하기/,
-        }),
-        root.getByRole("button", { name: /^예매하기$/ }),
-        root
-          .locator("button, a, [role='button']")
-          .filter({ hasText: /^예매하기$/ }),
-      ];
-      for (const loc of locs) {
-        const n = await loc.count().catch(() => 0);
-        for (let i = 0; i < Math.min(n, 3); i++) {
-          const b = loc.nth(i);
-          const visible = await b.isVisible().catch(() => false);
-          if (!visible) continue;
-          const enabled = await b.isEnabled().catch(() => true);
-          if (!enabled) continue;
-          // force 없이 1회만 — 성공하면 절대 재클릭 안 함
-          const ok = await b
-            .click({ timeout: 400, noWaitAfter: true })
-            .then(() => true)
-            .catch(() => false);
-          if (ok) {
-            log.ok("정각 예매 클릭 1회 완료 — 추가 클릭 없음");
-            return true;
-          }
-        }
+  let clicks = 0;
+  const maxClicks = 2; // 최초 + (요청 없을 때만) 1회
+
+  try {
+    while (Date.now() < deadline) {
+      // 이미 요청이 나갔거나 pending이면 절대 재클릭 안 함
+      if (requestGone(net) || (await pageLooksInFlight(page))) {
+        logNet(net, "요청 감지(또는 대기열) — 재클릭 안 함");
+        log.ok("예매 요청 진행 중/완료로 판단");
+        return true;
       }
+
+      if (clicks >= maxClicks) {
+        await new Promise((r) => setTimeout(r, 80));
+        continue;
+      }
+
+      const btn = await findOpenBookButton(page);
+      if (!btn) {
+        await new Promise((r) => setTimeout(r, 40));
+        continue;
+      }
+
+      // 클릭 직전 스냅샷
+      const startedBefore = net.started;
+      const ok = await btn
+        .click({ timeout: 400, noWaitAfter: true })
+        .then(() => true)
+        .catch(() => false);
+      if (!ok) {
+        await new Promise((r) => setTimeout(r, 40));
+        continue;
+      }
+      clicks += 1;
+      log.info(`예매 클릭 #${clicks}/${maxClicks}`);
+
+      // 요청이 나가는지 짧게 관찰 (pending이면 "간 것")
+      const observeUntil = Date.now() + 900;
+      while (Date.now() < observeUntil) {
+        if (requestGone(net) || (await pageLooksInFlight(page))) {
+          logNet(net, "클릭 후 요청 확인");
+          log.ok(
+            clicks === 1
+              ? "1회 클릭으로 요청 확인 — 추가 클릭 없음"
+              : "재클릭으로 요청 확인 — 추가 클릭 없음",
+          );
+          return true;
+        }
+        // pending 중이면 더 기다림 (재클릭 금지)
+        if (net.pending > 0) {
+          logNet(net, "pending — 간 것으로 처리");
+          return true;
+        }
+        await new Promise((r) => setTimeout(r, 40));
+      }
+
+      // 여기까지 왔는데 started 증가 없음 → 버튼만 눌리고 API 없음 (미활성/타이밍)
+      if (net.started === startedBefore && net.pending === 0) {
+        if (clicks < maxClicks) {
+          log.warn(
+            "클릭은 됐지만 예매 API 없음 — 버튼 활성화 대기 후 1회만 재시도",
+          );
+          await new Promise((r) => setTimeout(r, 120));
+          continue;
+        }
+        log.warn("재클릭 후에도 API 없음 — 중단 (연타 안 함)");
+        return false;
+      }
+
+      // started가 늘었으면 성공
+      logNet(net, "요청 발생");
+      return true;
     }
-    await new Promise((res) => setTimeout(res, 40));
+
+    if (requestGone(net) || (await pageLooksInFlight(page))) {
+      log.ok("시간 내 요청/대기열 감지");
+      return true;
+    }
+    log.warn(`정각 클릭 실패 clicks=${clicks}`);
+    return false;
+  } finally {
+    net.dispose();
   }
-  log.warn("정각 클릭 대상 버튼을 못 찾음 (1회 정책 유지, 연타 안 함)");
-  return false;
 }
 
-/** @deprecated 이름만 호환 — 내부는 1회 클릭 */
+/** @deprecated */
 export async function slamBookButtonsNow(
   page: Page,
   _rounds = 1,
