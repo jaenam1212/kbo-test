@@ -4,6 +4,7 @@ import {
   fetchPostseasonGoods,
   formatGoods,
   isBookingOpen,
+  parseNolTime,
   listVisibleBookButtons,
   pickBestGoods,
 } from "./goods.js";
@@ -202,11 +203,14 @@ export async function runBookFlow(
 
   // game-day가 이미 정각 맞춰 호출함 — 추가 대기는 최소만 (중복 sleep 금지)
   if (goods.bookingOpenTime) {
-    const openAt =
-      new Date(goods.bookingOpenTime).getTime() - config.openEarlyMs;
-    while (Date.now() < openAt) {
-      const left = openAt - Date.now();
-      if (left > 200) await new Promise((r) => setTimeout(r, Math.min(50, left)));
+    const openMs = parseNolTime(goods.bookingOpenTime);
+    if (openMs != null) {
+      const openAt = openMs - config.openEarlyMs;
+      while (Date.now() < openAt) {
+        const left = openAt - Date.now();
+        if (left > 200)
+          await new Promise((r) => setTimeout(r, Math.min(50, left)));
+      }
     }
   }
 

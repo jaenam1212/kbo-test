@@ -85,12 +85,35 @@ export function isKiaHomeCandidate(g: SportsGoods, config: AppConfig): boolean {
   );
 }
 
+/**
+ * NOL bookingOpenTime은 보통 timezone 없는 KST 시각(예: 2026-10-15T14:00:00).
+ * timezone 없으면 +09:00으로 해석. Z/+offset 있으면 그대로.
+ */
+export function parseNolTime(raw?: string | null): number | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (!s) return null;
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) {
+    const t = new Date(s).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  // date-only
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const t = new Date(`${s}T00:00:00+09:00`).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  // datetime without tz → KST
+  const normalized = s.includes("T") ? s : s.replace(" ", "T");
+  const t = new Date(`${normalized}+09:00`).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
 export function isBookingOpen(g: SportsGoods, earlyMs = 0): boolean {
   if (!g.bookingOpenTime) return true;
-  const openAt = new Date(g.bookingOpenTime).getTime() - earlyMs;
-  const endAt = g.bookingEndTime
-    ? new Date(g.bookingEndTime).getTime()
-    : Infinity;
+  const openMs = parseNolTime(g.bookingOpenTime);
+  if (openMs == null) return true;
+  const openAt = openMs - earlyMs;
+  const endAt = parseNolTime(g.bookingEndTime ?? null) ?? Infinity;
   const now = Date.now();
   return now >= openAt && now <= endAt;
 }

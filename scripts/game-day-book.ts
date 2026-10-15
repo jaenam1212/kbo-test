@@ -13,6 +13,7 @@ import {
   fetchPostseasonGoods,
   formatGoods,
   isBookingOpen,
+  parseNolTime,
   pickBestGoods,
 } from "../src/goods.js";
 import { runBookFlow } from "../src/flow.js";
@@ -125,9 +126,7 @@ async function main() {
   let lastKeepLog = 0;
   let precision = false;
   for (;;) {
-    const openMs = best?.bookingOpenTime
-      ? new Date(best.bookingOpenTime).getTime()
-      : 0;
+    const openMs = parseNolTime(best?.bookingOpenTime) ?? 0;
     const fireAt = openMs ? openMs - config.openEarlyMs : 0;
     const leftToFire = fireAt ? fireAt - Date.now() : Infinity;
 
