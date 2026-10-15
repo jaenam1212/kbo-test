@@ -153,10 +153,11 @@ async function main() {
   }
 
   let active = pickTicketPage(context, page);
-  let skew = await measureServerSkewMs("https://nol.yanolja.com/");
-  // interpark Date도 시도해 평균
-  const skew2 = await measureServerSkewMs("https://tickets.interpark.com/");
-  if (skew2 !== 0) skew = Math.round((skew + skew2) / 2);
+  // 티켓 서버(Interpark) Date 우선 — 화면 타이머가 아니라 HTTP Date
+  let skew = await measureServerSkewMs("https://tickets.interpark.com/");
+  if (skew === 0) {
+    skew = await measureServerSkewMs("https://nol.yanolja.com/");
+  }
   log.ok(
     `서버오픈 ${new Date(openServerMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} | fire early=${config.openEarlyMs}ms | skew=${skew}ms`,
   );
