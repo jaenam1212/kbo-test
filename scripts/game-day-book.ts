@@ -12,7 +12,7 @@ import {
   pickBestGoods,
 } from "../src/goods.js";
 import { clickBookForGoods, runBookFlow } from "../src/flow.js";
-import { clickBookButtonOnceAtOpen } from "../src/seats.js";
+import { mashBookUntilRequest } from "../src/seats.js";
 import { measureServerSkewMs, waitUntilServerMs } from "../src/time.js";
 import { log } from "../src/logger.js";
 
@@ -78,15 +78,15 @@ async function main() {
   config.pollIntervalMs = Number(
     process.env.POLL_MS || config.pollIntervalMs || 500,
   );
-  // UI 타이머 무시 — 서버 오픈 시각에 맞춤 (조기는 기본 0)
-  config.openEarlyMs = Number(process.env.OPEN_EARLY_MS ?? "0");
+  // 오픈 5초 전(14:59:55)부터 마사지건 연타 — 첫 API 나가면 즉시 중단
+  config.openEarlyMs = Number(process.env.OPEN_EARLY_MS ?? "5000");
 
-  log.info("=== 경기일 예매 준비 (서버타임 정각 1클릭) ===");
+  log.info("=== 경기일 예매 준비 (마사지건: 오픈5초전~연타, 첫요청시중단) ===");
   log.info(
     `매수: ${config.seatCount}연석 | ①중앙테이블≈3루테이블 → ②테이블3연석 → ③아무3연석`,
   );
   log.info(
-    `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | early ${config.openEarlyMs}ms | UI타이머무시·서버시각클릭`,
+    `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | early ${config.openEarlyMs}ms | 첫API면중단`,
   );
   log.info(
     `핀 goodsCode=${pinGoodsCode} | 지금(KST): ${kstNow().toLocaleString("ko-KR")}`,
@@ -187,9 +187,9 @@ async function main() {
       }
     }
 
-    // 오픈 90초 전 skew 재측정 1회
+    // 오픈 90초 전 skew 재측정 1회 (Interpark)
     if (!remMeasured && leftLocal < 90000) {
-      skew = await measureServerSkewMs("https://nol.yanolja.com/");
+      skew = await measureServerSkewMs("https://tickets.interpark.com/");
       remMeasured = true;
       log.ok(`skew 재측정=${skew}ms`);
     }
@@ -198,22 +198,27 @@ async function main() {
   }
 
   if (!remMeasured) {
-    skew = await measureServerSkewMs("https://nol.yanolja.com/");
+    skew = await measureServerSkewMs("https://tickets.interpark.com/");
     remMeasured = true;
     log.ok(`skew 최종=${skew}ms`);
   }
 
   active = pickTicketPage(context, page);
+  // fireServerMs = open - 5000 → 14:59:55부터 연타
   log.ok(
-    `서버타임 busy-wait 시작 — UI 카운트다운 읽지 않음 (fire KST ${new Date(fireServerMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })})`,
+    `서버타임 대기 → ${new Date(fireServerMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} 부터 마사지건 연타 (오픈 ${new Date(openServerMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })})`,
   );
   await waitUntilServerMs(fireServerMs, skew, { spinFromMs: 3000 });
 
   active = pickTicketPage(context, page);
   log.ok(
-    `정각 클릭 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — API 없으면 1회만 재시도, pending이면 재클릭 금지`,
+    `마사지건 NOW ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} — 첫 예매 API에서 중단`,
   );
-  await clickBookButtonOnceAtOpen(active, 15000);
+  // 5초 early + 오픈 후 여유 ~15초
+  await mashBookUntilRequest(active, {
+    maxMs: config.openEarlyMs + 15000,
+    intervalMs: 30,
+  });
 
   await runBookFlow(context, pickTicketPage(context, page), config, best, {
     fromTimer: true,
