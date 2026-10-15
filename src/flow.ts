@@ -200,18 +200,13 @@ export async function runBookFlow(
   }
   if (!goods) throw new Error("예매할 기아 홈 상품이 없습니다.");
 
-  // 오픈 직전: 포스트시즌 워밍업 후 정밀 대기 → 게이트 직행
-  await ensureOnPostseason(page, config);
+  // game-day가 이미 정각 맞춰 호출함 — 추가 대기는 최소만 (중복 sleep 금지)
   if (goods.bookingOpenTime) {
-    const openAt = new Date(goods.bookingOpenTime).getTime() - config.openEarlyMs;
+    const openAt =
+      new Date(goods.bookingOpenTime).getTime() - config.openEarlyMs;
     while (Date.now() < openAt) {
       const left = openAt - Date.now();
-      if (left > 5000 && left % 10000 < 1000) {
-        log.info(`오픈까지 ${Math.ceil(left / 1000)}초 (게이트 직행 대기)`);
-      } else if (left <= 5000) {
-        log.info(`오픈까지 ${Math.ceil(left / 1000)}초`);
-      }
-      await page.waitForTimeout(Math.min(left > 3000 ? 500 : 50, left));
+      if (left > 200) await new Promise((r) => setTimeout(r, Math.min(50, left)));
     }
   }
 
