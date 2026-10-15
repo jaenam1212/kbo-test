@@ -52,7 +52,9 @@ async function main() {
     if (best) {
       log.ok("기아 홈 후보:", formatGoods(best));
       if (isBookingOpen(best, config.openEarlyMs)) {
-        log.ok("오픈됨 — 예매 플로우 시작 (2연석 → 결제 직전)");
+        log.ok(
+          `오픈됨 — 예매 플로우 시작 (${config.seatCount}연석 → 결제 직전)`,
+        );
         await runBookFlow(context, page, config, best);
         log.ok("결제만 직접 완료하세요. 브라우저 유지.");
         await new Promise(() => {});

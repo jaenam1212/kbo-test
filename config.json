@@ -1,7 +1,7 @@
 {
   "postseasonUrl": "https://nol.yanolja.com/ticket/genre/sports/postseason",
-  "pollIntervalMs": 1500,
-  "seatCount": 2,
+  "pollIntervalMs": 1000,
+  "seatCount": 3,
   "requireConsecutive": true,
   "headless": false,
   "profileDir": ".browser-profile",
@@ -16,10 +16,11 @@
   ],
   "homeVenueKeywords": ["광주", "챔피언스"],
   "preferredGrades": [
-    "테이블석(2인)",
-    "미니 테이블석",
     "테이블석(3인)",
+    "미니 테이블석",
+    "테이블석(2인)",
     "테이블석(4인)",
+    "테이블석(5인)",
     "테이블석",
     "3루 테이블",
     "1루 테이블",
@@ -38,6 +39,6 @@
   ],
   "avoidGrades": ["외야", "스카이박스", "스윗박스", "휠체어", "시야방해", "익사이팅"],
   "preferHomeSide": "3루",
-  "maxGradeAttempts": 40,
-  "openEarlyMs": 2000
+  "maxSaleAttempts": 60,
+  "openEarlyMs": 5000
 }

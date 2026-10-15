@@ -9,15 +9,17 @@ function usage() {
 NOL(야놀자) 티켓 · KBO 가을야구 기아 홈 예매 도우미
 
 사용법:
-  npm start                 감시 → 오픈 시 2연석 선택 → 결제 직전에서 정지
+  npm start                 감시 → 오픈 시 연석 선택 → 결제 직전에서 정지
   npm run watch             기아 홈 상품이 뜰 때까지 감시
   npm run dry-run           상품 목록만 한 번 조회
   npm run book              로그인부터 예매 플로우 실행
+  npm run game-day          1:40 준비 → 2시 오픈 3연석 (경기일)
 
 환경변수:
   HEADLESS=1                브라우저 숨김 (기본: 표시)
-  SEAT_COUNT=2              매수 (연석)
-  POLL_MS=1500              감시 주기(ms)
+  SEAT_COUNT=3              매수 (연석)
+  POLL_MS=1000              감시 주기(ms)
+  PREP_AT=13:40             game-day 준비 시각(KST)
 `);
 }
 
@@ -54,7 +56,9 @@ async function main() {
     }
 
     if (cmd === "book" || cmd === "start") {
-      log.info("NOL 티켓 기준 — 로그인·결제는 직접, 좋은 2연석까지 자동");
+      log.info(
+        `NOL 티켓 기준 — 로그인·결제는 직접, 좋은 ${config.seatCount}연석까지 자동`,
+      );
       await runBookFlow(context, page, config);
       log.info("결제 후 종료하려면 Ctrl+C");
       await new Promise(() => {});
