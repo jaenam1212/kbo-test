@@ -98,7 +98,7 @@ export async function watchForKiaHome(
   }
 }
 
-async function clickBookForGoods(
+export async function clickBookForGoods(
   page: Page,
   g: SportsGoods,
   config: AppConfig,
@@ -161,61 +161,69 @@ export async function runBookFlow(
   page: Page,
   config: AppConfig,
   target?: SportsGoods | null,
+  opts: { fromTimer?: boolean } = {},
 ): Promise<void> {
-  await page.goto(config.postseasonUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  });
-
-  // 먼저 로그인 유도
-  log.info("브라우저에서 NOL(야놀자) 로그인을 먼저 해주세요.");
-  await page.goto("https://accounts.yanolja.com/", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  }).catch(() => null);
-  await ensureOnPostseason(page, config);
-
-  // auth 체크 — 안 되어 있으면 예매 클릭 시 로그인으로 떨어지므로 안내
-  const auth = await page
-    .evaluate(async () => {
-      try {
-        const r = await fetch("/ticket/genre/sports/api/auth", {
-          credentials: "include",
-        });
-        return await r.json();
-      } catch {
-        return { isLoggedIn: false };
-      }
-    })
-    .catch(() => ({ isLoggedIn: false }));
-
-  if (!auth?.isLoggedIn) {
-    log.info("NOL 로그인 페이지를 엽니다. 로그인·본인인증은 직접 해주세요.");
-    const redirect = `b64.${Buffer.from(config.postseasonUrl).toString("base64")}`;
-    await page
-      .goto(
-        `https://accounts.yanolja.com/v3/login?service=yanolja&redirect=${redirect}`,
-        { waitUntil: "domcontentloaded" },
-      )
-      .catch(async () => {
-        await page.goto("https://accounts.yanolja.com/v3/login", {
-          waitUntil: "domcontentloaded",
-        });
-      });
-    await waitForLogin(page);
-    await ensureOnPostseason(page, config);
-  } else {
-    log.ok("이미 NOL 로그인된 상태입니다.");
-  }
-
   let goods = target ?? null;
-  if (!goods) {
-    goods = await watchForKiaHome(page, config);
+
+  // 타이머/게이트에서 이미 대기 중이면 포스트시즌·로그인 페이지로 튕기지 않음
+  if (!opts.fromTimer) {
+    await page.goto(config.postseasonUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    log.info("브라우저에서 NOL(야놀자) 로그인을 먼저 해주세요.");
+    await page
+      .goto("https://accounts.yanolja.com/", {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      })
+      .catch(() => null);
+    await ensureOnPostseason(page, config);
+
+    const auth = await page
+      .evaluate(async () => {
+        try {
+          const r = await fetch("/ticket/genre/sports/api/auth", {
+            credentials: "include",
+          });
+          return await r.json();
+        } catch {
+          return { isLoggedIn: false };
+        }
+      })
+      .catch(() => ({ isLoggedIn: false }));
+
+    if (!auth?.isLoggedIn) {
+      log.info("NOL 로그인 페이지를 엽니다. 로그인·본인인증은 직접 해주세요.");
+      const redirect = `b64.${Buffer.from(config.postseasonUrl).toString("base64")}`;
+      await page
+        .goto(
+          `https://accounts.yanolja.com/v3/login?service=yanolja&redirect=${redirect}`,
+          { waitUntil: "domcontentloaded" },
+        )
+        .catch(async () => {
+          await page.goto("https://accounts.yanolja.com/v3/login", {
+            waitUntil: "domcontentloaded",
+          });
+        });
+      await waitForLogin(page);
+      await ensureOnPostseason(page, config);
+    } else {
+      log.ok("이미 NOL 로그인된 상태입니다.");
+    }
+
+    if (!goods) {
+      goods = await watchForKiaHome(page, config);
+    }
+  } else {
+    log.ok("타이머/게이트 대기 화면에서 이어서 예매 진행");
   }
+
   if (!goods) throw new Error("예매할 기아 홈 상품이 없습니다.");
 
-  // game-day가 이미 정각 맞춰 호출함 — 추가 대기는 최소만 (중복 sleep 금지)
-  if (goods.bookingOpenTime) {
+  // fromTimer면 이미 오픈 시각에 호출됨 — 추가 sleep/재클릭 최소화
+  if (!opts.fromTimer && goods.bookingOpenTime) {
     const openMs = parseNolTime(goods.bookingOpenTime);
     if (openMs != null) {
       const openAt = openMs - config.openEarlyMs;
@@ -237,16 +245,28 @@ export async function runBookFlow(
   let attempts = 0;
   while (attempts < config.maxSaleAttempts) {
     attempts += 1;
-    log.info(`예매 시도 ${attempts}/${config.maxSaleAttempts} (게이트 직행·${config.seatCount}연석)`);
+    log.info(
+      `예매 시도 ${attempts}/${config.maxSaleAttempts} (${opts.fromTimer ? "타이머유지" : "NOL예매하기"}·${config.seatCount}연석)`,
+    );
     try {
-      // 1회차: NOL '예매하기' 경로 우선 (게이트 URL 직행은 비정상접근 유발)
-      // 2회차+: 재돌입 자체를 최소화 — NOL 버튼만
-      await clickBookForGoods(page, goods, config, { preferGate: false });
+      const alreadyOnTicket = context
+        .pages()
+        .some((p) =>
+          /tickets\.interpark\.com|\/waiting|onestop/i.test(p.url()),
+        );
 
-      await page.waitForTimeout(400);
-      if (page.url().includes(NOL_LOGIN_HOST)) {
-        await waitForLogin(page);
+      // 타이머/게이트에 이미 있으면 재클릭·재goto 금지 (튕김/비정상접근 원인)
+      if (!(opts.fromTimer && alreadyOnTicket) && attempts === 1) {
         await clickBookForGoods(page, goods, config, { preferGate: false });
+        await page.waitForTimeout(400);
+        if (page.url().includes(NOL_LOGIN_HOST)) {
+          await waitForLogin(page);
+          await clickBookForGoods(page, goods, config, { preferGate: false });
+        }
+      } else if (attempts > 1 && !alreadyOnTicket) {
+        await clickBookForGoods(page, goods, config, { preferGate: false });
+      } else {
+        log.info("기존 티켓/타이머 탭 유지 — 재진입 생략");
       }
 
       await page.waitForTimeout(300);

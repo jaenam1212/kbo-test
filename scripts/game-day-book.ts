@@ -1,11 +1,12 @@
 /**
- * 경기일 예매: 지정 시각(기본 13:40 KST)부터 준비 → 기아 홈 오픈 시 3연석 → 결제 직전.
+ * 경기일 예매: 오픈 전 NOL 예매하기 → 타이머/게이트에서 대기 → 정각에 이어서 3연석.
  *
  * 환경변수:
  *   PREP_AT=13:40          준비 시작 (KST HH:mm)
- *   TARGET_OPEN=14:00      노릴 오픈 시각(참고 로그용, 실제는 상품 bookingOpenTime)
+ *   TARGET_OPEN=15:00      노릴 오픈 시각(참고 로그용)
  *   SEAT_COUNT=3
  *   HEADLESS=0
+ *   GOODS_CODE=26014419
  */
 import { loadConfig } from "../src/config.js";
 import { launchContext } from "../src/browser.js";
@@ -16,7 +17,7 @@ import {
   parseNolTime,
   pickBestGoods,
 } from "../src/goods.js";
-import { runBookFlow } from "../src/flow.js";
+import { clickBookForGoods, runBookFlow } from "../src/flow.js";
 import { log } from "../src/logger.js";
 
 function kstNow(): Date {
@@ -37,8 +38,9 @@ function todayKstAt(hhmm: string): Date {
   const y = parts.find((p) => p.type === "year")!.value;
   const mo = parts.find((p) => p.type === "month")!.value;
   const d = parts.find((p) => p.type === "day")!.value;
-  // Asia/Seoul offset +09:00
-  return new Date(`${y}-${mo}-${d}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+09:00`);
+  return new Date(
+    `${y}-${mo}-${d}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00+09:00`,
+  );
 }
 
 async function sleepUntil(target: Date, label: string) {
@@ -56,25 +58,59 @@ async function sleepUntil(target: Date, label: string) {
   }
 }
 
+function isTimerOrGateUrl(url: string): boolean {
+  return /tickets\.interpark\.com|\/waiting|gates\/(ticket|partner)/i.test(url);
+}
+
+async function holdOnTimerHint(
+  page: import("playwright").Page,
+): Promise<string> {
+  const url = page.url();
+  const text = (await page.locator("body").innerText().catch(() => "")).slice(
+    0,
+    1200,
+  );
+  if (/정상적인\s*접근이\s*아닙니다|비정상\s*접근/.test(text)) return "ABNORMAL";
+  if (/\/waiting/i.test(url) || /접속 인원이 많아 대기|나의 대기순서/.test(text))
+    return "QUEUE";
+  if (/확인하고\s*예매하기|예매 준비가 완료/.test(text)) return "CONFIRM";
+  if (/onestop\/seat/i.test(url)) return "SEAT";
+  if (
+    /\d{1,2}\s*:\s*\d{2}\s*:\s*\d{2}/.test(text) ||
+    /예매\s*시작|오픈\s*까지|남았습니다|카운트|타이머|곧 예매|판매\s*시작/.test(
+      text,
+    )
+  ) {
+    return "TIMER";
+  }
+  if (isTimerOrGateUrl(url)) return "GATE";
+  return "OTHER";
+}
+
 async function main() {
   const prepAt = process.env.PREP_AT || "13:30";
-  const targetOpen = process.env.TARGET_OPEN || "14:00";
-  /** 1차전 고정 (속도전: 탐색 생략) */
-  const pinGoodsCode = process.env.GOODS_CODE || "26014417";
+  const targetOpen = process.env.TARGET_OPEN || "15:00";
+  const pinGoodsCode = process.env.GOODS_CODE || "26014419";
   const config = loadConfig();
   config.headless = process.env.HEADLESS === "1";
   config.seatCount = Number(process.env.SEAT_COUNT || config.seatCount || 3);
-  config.pollIntervalMs = Number(process.env.POLL_MS || config.pollIntervalMs || 500);
-  config.openEarlyMs = Number(process.env.OPEN_EARLY_MS || config.openEarlyMs || 12000);
+  config.pollIntervalMs = Number(
+    process.env.POLL_MS || config.pollIntervalMs || 500,
+  );
+  config.openEarlyMs = Number(
+    process.env.OPEN_EARLY_MS || config.openEarlyMs || 1500,
+  );
 
-  log.info("=== 경기일 예매 준비 (속도전) ===");
+  log.info("=== 경기일 예매 준비 (타이머 대기) ===");
   log.info(
     `매수: ${config.seatCount}연석 | ①중앙테이블≈3루테이블 → ②테이블3연석 → ③아무3연석`,
   );
   log.info(
-    `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | 조기진입 ${config.openEarlyMs}ms | NOL예매하기`,
+    `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | 조기 ${config.openEarlyMs}ms | 예매하기→타이머홀드`,
   );
-  log.info(`핀 goodsCode=${pinGoodsCode} | 지금(KST): ${kstNow().toLocaleString("ko-KR")}`);
+  log.info(
+    `핀 goodsCode=${pinGoodsCode} | 지금(KST): ${kstNow().toLocaleString("ko-KR")}`,
+  );
 
   const prepTime = todayKstAt(prepAt);
   if (Date.now() < prepTime.getTime()) {
@@ -108,61 +144,72 @@ async function main() {
     await context.close();
     process.exit(1);
   }
-  log.ok("로그인·본인인증 OK — 오픈 감시 시작");
+  log.ok("로그인·본인인증 OK");
 
-  // 워밍업: 상품 목록 + 1차전 핀
-  let goods = await fetchPostseasonGoods(page, config.postseasonUrl);
+  // 상품 목록 1회만 조회 (이후 postseason goto 금지 — Take Control/타이머 튕김 원인)
+  const goods = await fetchPostseasonGoods(page, config.postseasonUrl);
   for (const g of goods) log.info(" -", formatGoods(g));
-  let best =
+  const best =
     goods.find((g) => g.goodsCode === pinGoodsCode) ||
     pickBestGoods(goods, config);
   if (!best) {
-    log.warn("기아 홈 후보 없음 — 폴링");
-  } else {
-    log.ok("타깃:", formatGoods(best));
+    log.error("타깃 상품 없음");
+    process.exit(1);
+  }
+  log.ok("타깃:", formatGoods(best));
+
+  const openMs = parseNolTime(best.bookingOpenTime) ?? 0;
+  const fireAt = openMs - config.openEarlyMs;
+
+  // 오픈 전이면 예매하기 1회 → 타이머/게이트에서 대기 (페이지 새로고침·재goto 없음)
+  let onTimer = context.pages().some((p) => isTimerOrGateUrl(p.url()));
+  if (!isBookingOpen(best, config.openEarlyMs) && !onTimer) {
+    log.ok("오픈 전 — NOL 예매하기 1회 클릭 후 타이머에서 대기");
+    await clickBookForGoods(page, best, config, { preferGate: false });
+    await page.waitForTimeout(2000);
+    onTimer = true;
   }
 
-  // 오픈 직전: 무거운 목록 폴링 중단 → 정밀 대기 → 정각 게이트 직행
-  let lastKeepLog = 0;
-  let precision = false;
+  let lastHintLog = 0;
   for (;;) {
-    const openMs = parseNolTime(best?.bookingOpenTime) ?? 0;
-    const fireAt = openMs ? openMs - config.openEarlyMs : 0;
-    const leftToFire = fireAt ? fireAt - Date.now() : Infinity;
+    const pages = context.pages();
+    const active =
+      pages.find((p) => /onestop\/seat/i.test(p.url())) ||
+      pages.find((p) => /\/waiting/i.test(p.url())) ||
+      pages.find((p) => isTimerOrGateUrl(p.url())) ||
+      page;
 
-    // 마지막 90초: 포스트시즌 재조회 금지 (goto가 타이밍을 밀음)
-    if (leftToFire > 90000) {
-      if (!best || Date.now() - lastKeepLog > 15000) {
-        goods = await fetchPostseasonGoods(page, config.postseasonUrl);
-        best =
-          goods.find((g) => g.goodsCode === pinGoodsCode) ||
-          pickBestGoods(goods, config) ||
-          best;
-        if (best) log.info("타깃 유지:", formatGoods(best));
-        lastKeepLog = Date.now();
-      }
-    } else if (!precision && best) {
-      precision = true;
-      log.ok(
-        `정밀모드 ON — ${Math.ceil(leftToFire / 1000)}초 후 게이트직행 (조기 ${config.openEarlyMs}ms)`,
+    const hint = await holdOnTimerHint(active);
+    const left = fireAt - Date.now();
+
+    if (hint === "ABNORMAL") {
+      log.error(
+        "비정상 접근 — 중단. 브라우저 유지. Take Control로 NOL에서 예매하기 한 번만.",
       );
-      // DNS/TLS 워밍: 게이트 호스트만 한 번 터치 (본 진입은 정각)
-      if (best.goodsCode && best.placeCode) {
-        const warm = `https://tickets.interpark.com/gates/ticket/${best.goodsCode}`;
-        await page
-          .evaluate(async (u) => {
-            try {
-              await fetch(u, { mode: "no-cors", credentials: "include" });
-            } catch {
-              /* ignore */
-            }
-          }, warm)
-          .catch(() => null);
+      await new Promise(() => {});
+      return;
+    }
+
+    if (Date.now() - lastHintLog > 15000) {
+      log.info(
+        `타이머홀드 ${hint} | 오픈까지 ${Math.max(0, Math.ceil(left / 1000))}초 | ${active.url().slice(0, 100)}`,
+      );
+      lastHintLog = Date.now();
+    } else if (left > 0 && left < 120000) {
+      const sec = Math.ceil(left / 1000);
+      if (sec <= 30 || sec % 5 === 0) {
+        log.info(`돌입까지 ${sec}초 (정각 ${targetOpen}) · ${hint}`);
       }
     }
 
-    if (best && isBookingOpen(best, config.openEarlyMs)) {
-      // 정각(또는 조기창) 도달 — busy-wait로 밀리초 맞춤 후 즉시 돌입
+    // 정각(조기창) 또는 이미 대기열/좌석으로 넘어간 경우
+    const opened =
+      isBookingOpen(best, config.openEarlyMs) ||
+      hint === "QUEUE" ||
+      hint === "CONFIRM" ||
+      hint === "SEAT";
+
+    if (opened && left <= 0) {
       if (fireAt > 0) {
         while (Date.now() < fireAt) {
           /* spin */
@@ -170,24 +217,25 @@ async function main() {
       }
       const skew = Date.now() - openMs;
       log.ok(
-        `오픈 돌입 now=${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} (정각대비 ${skew}ms) → ${config.seatCount}연석`,
+        `오픈 돌입 now=${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} (정각대비 ${skew}ms) → 타이머에서 이어서`,
       );
-      await runBookFlow(context, page, config, best);
+      await runBookFlow(context, active, config, best, { fromTimer: true });
       log.ok("결제만 직접 하세요. 브라우저 유지.");
       await new Promise(() => {});
       return;
     }
 
-    if (leftToFire > 0 && leftToFire < 120000) {
-      const sec = Math.ceil(leftToFire / 1000);
-      if (sec <= 30 || sec % 5 === 0) {
-        log.info(`돌입까지 ${sec}초 (정각 ${targetOpen})`);
-      }
+    // 오픈 전에 대기열로 들어가면 그대로 통과 대기 (runBookFlow가 처리)
+    if (hint === "QUEUE" || hint === "CONFIRM" || hint === "SEAT") {
+      log.ok(`오픈 전 신호 ${hint} — 타이머/대기열 유지하다 이어서 진행`);
+      await runBookFlow(context, active, config, best, { fromTimer: true });
+      log.ok("결제만 직접 하세요. 브라우저 유지.");
+      await new Promise(() => {});
+      return;
     }
 
-    // 마지막 3초는 50ms, 그 전 90초는 100ms, 평소는 pollInterval
-    const tick =
-      leftToFire <= 3000 ? 50 : leftToFire <= 90000 ? 100 : config.pollIntervalMs;
+    // 절대 postseason으로 돌아가지 않음. Take Control과 충돌 방지.
+    const tick = left <= 3000 ? 50 : left <= 90000 ? 200 : 1000;
     await new Promise((r) => setTimeout(r, tick));
   }
 }
