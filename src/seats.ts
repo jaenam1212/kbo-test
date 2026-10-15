@@ -1,6 +1,7 @@
 import type { Frame, Page } from "playwright";
 import type { AppConfig, SelectedSeat } from "./types.js";
 import {
+  gradeTier,
   parseRemaining,
   pickBestGradeIndex,
   scoreGradeLabel,
@@ -785,31 +786,40 @@ export async function selectGoodConsecutiveSeats(
       graded.push({ label: c.label, s, remaining: c.remaining });
     }
   }
-  // 잔여>0 테이블/중앙테이블이 있으면 그것만 우선
-  const tableAvail = graded.filter(
-    (g) => /테이블/.test(g.label) && (g.remaining == null || g.remaining > 0),
-  );
-  const pool = tableAvail.some((g) => (g.remaining ?? 0) > 0)
-    ? graded.filter((g) => (g.remaining ?? 0) > 0)
-    : graded.filter((g) => g.remaining == null || g.remaining > 0);
+  // 폭포: 1) 중앙테이블≈3루테이블 → 2) 그 외 테이블 → 3) 아무 3연석
+  const pool = graded.filter((g) => g.remaining == null || g.remaining > 0);
   pool.sort((a, b) => {
-    const rank = (label: string) => {
-      if (/중앙\s*테이블|중앙테이블/.test(label)) return 3;
-      if (/테이블/.test(label)) return 2;
-      return 0;
-    };
-    const d = rank(b.label) - rank(a.label);
+    const d = gradeTier(b.label) - gradeTier(a.label);
     if (d !== 0) return d;
     return b.s - a.s;
   });
 
   const gradeLabels = pool.map((g) => g.label);
+  const tier1 = pool.filter((g) => gradeTier(g.label) === 3);
+  const tier2 = pool.filter((g) => gradeTier(g.label) === 2);
   log.info(
-    "등급 후보(중앙테이블·테이블·잔여 우선):",
-    pool
-      .slice(0, 10)
-      .map((g) => `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`)
-      .join(" / ") || "(자동 감지 실패 — preferredGrades 기준)",
+    "등급 후보 폭포(①중앙≈3루테이블 → ②테이블3연석 → ③아무3연석):",
+    [
+      tier1.length
+        ? `① ${tier1
+            .slice(0, 6)
+            .map(
+              (g) =>
+                `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`,
+            )
+            .join(" / ")}`
+        : "① (없음)",
+      tier2.length
+        ? `② ${tier2
+            .slice(0, 6)
+            .map(
+              (g) =>
+                `${g.label}${g.remaining != null ? `(잔여${g.remaining})` : ""}`,
+            )
+            .join(" / ")}`
+        : "② (없음)",
+      "③ 나머지 등급·도면 직선택",
+    ].join(" | "),
   );
 
   const tryOrder =
@@ -817,7 +827,8 @@ export async function selectGoodConsecutiveSeats(
       ? gradeLabels
       : [...config.preferredGrades];
 
-  for (const grade of tryOrder.slice(0, 16)) {
+  // 티어1~2 먼저, 없으면 일반 등급까지 넓게 시도 (마지막에 도면 직선택 폴백)
+  for (const grade of tryOrder.slice(0, 28)) {
     log.info(`등급 시도: ${grade}`);
     // 클릭용 짧은 이름 (잔여 숫자·가격 제거)
     const clickName = grade
@@ -888,7 +899,7 @@ export async function selectGoodConsecutiveSeats(
   }
 
   throw new Error(
-    "좋은 2연석을 자동으로 못 찾았습니다. 브라우저에서 좌석만 고르면 결제 직전까지는 직접 진행하세요.",
+    "3연석을 자동으로 못 찾았습니다. 브라우저에서 좌석만 고르면 결제 직전까지는 직접 진행하세요.",
   );
 }
 

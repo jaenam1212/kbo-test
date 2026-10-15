@@ -67,7 +67,9 @@ async function main() {
   config.openEarlyMs = Number(process.env.OPEN_EARLY_MS || config.openEarlyMs || 12000);
 
   log.info("=== 경기일 예매 준비 (속도전) ===");
-  log.info(`매수: ${config.seatCount}연석 | 중앙테이블·테이블석(3인) 우선`);
+  log.info(
+    `매수: ${config.seatCount}연석 | ①중앙테이블≈3루테이블 → ②테이블3연석 → ③아무3연석`,
+  );
   log.info(
     `준비 ${prepAt} KST | 오픈 ${targetOpen} KST | 조기진입 ${config.openEarlyMs}ms | 게이트직행`,
   );
